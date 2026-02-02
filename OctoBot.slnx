@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OctoBot.Agent/OctoBot.Agent.csproj" />
+    <Project Path="src/OctoBot.Api/OctoBot.Api.csproj" />
+    <Project Path="src/OctoBot.Application/OctoBot.Application.csproj" />
+    <Project Path="src/OctoBot.Channels.Abstractions/OctoBot.Channels.Abstractions.csproj" />
+    <Project Path="src/OctoBot.Channels.Telegram/OctoBot.Channels.Telegram.csproj" />
+    <Project Path="src/OctoBot.Core/OctoBot.Core.csproj" />
+    <Project Path="src/OctoBot.Infrastructure/OctoBot.Infrastructure.csproj" />
+    <Project Path="src/OctoBot.LLM.Abstractions/OctoBot.LLM.Abstractions.csproj" />
+    <Project Path="src/OctoBot.LLM.Anthropic/OctoBot.LLM.Anthropic.csproj" />
+    <Project Path="src/OctoBot.LLM.Ollama/OctoBot.LLM.Ollama.csproj" />
+    <Project Path="src/OctoBot.LLM.OpenAI/OctoBot.LLM.OpenAI.csproj" />
+    <Project Path="src/OctoBot.Plugins.Abstractions/OctoBot.Plugins.Abstractions.csproj" />
+    <Project Path="src/OctoBot.Plugins.Core/OctoBot.Plugins.Core.csproj" />
+  </Folder>
+</Solution>

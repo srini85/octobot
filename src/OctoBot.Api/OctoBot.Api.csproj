@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OctoBot.Core\OctoBot.Core.csproj" />
+    <ProjectReference Include="..\OctoBot.Application\OctoBot.Application.csproj" />
+    <ProjectReference Include="..\OctoBot.Infrastructure\OctoBot.Infrastructure.csproj" />
+    <ProjectReference Include="..\OctoBot.Agent\OctoBot.Agent.csproj" />
+    <ProjectReference Include="..\OctoBot.LLM.Abstractions\OctoBot.LLM.Abstractions.csproj" />
+    <ProjectReference Include="..\OctoBot.LLM.OpenAI\OctoBot.LLM.OpenAI.csproj" />
+    <ProjectReference Include="..\OctoBot.LLM.Anthropic\OctoBot.LLM.Anthropic.csproj" />
+    <ProjectReference Include="..\OctoBot.LLM.Ollama\OctoBot.LLM.Ollama.csproj" />
+    <ProjectReference Include="..\OctoBot.Channels.Abstractions\OctoBot.Channels.Abstractions.csproj" />
+    <ProjectReference Include="..\OctoBot.Channels.Telegram\OctoBot.Channels.Telegram.csproj" />
+    <ProjectReference Include="..\OctoBot.Plugins.Abstractions\OctoBot.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\OctoBot.Plugins.Core\OctoBot.Plugins.Core.csproj" />
+  </ItemGroup>
+
+</Project>

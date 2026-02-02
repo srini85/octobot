@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" Version="11.11.0" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.11.0" />
+    <PackageReference Include="Mapster" Version="7.4.0" />
+    <PackageReference Include="MediatR" Version="12.4.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OctoBot.Core\OctoBot.Core.csproj" />
+    <ProjectReference Include="..\OctoBot.LLM.Abstractions\OctoBot.LLM.Abstractions.csproj" />
+    <ProjectReference Include="..\OctoBot.Channels.Abstractions\OctoBot.Channels.Abstractions.csproj" />
+    <ProjectReference Include="..\OctoBot.Plugins.Abstractions\OctoBot.Plugins.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
