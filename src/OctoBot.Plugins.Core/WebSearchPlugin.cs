@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 using OctoBot.Plugins.Abstractions;
 
 namespace OctoBot.Plugins.Core;
@@ -10,6 +10,12 @@ public class WebSearchPlugin : IPlugin
 {
     private HttpClient? _httpClient;
     private string? _apiKey;
+    private readonly WebSearchFunctions _functions;
+
+    public WebSearchPlugin()
+    {
+        _functions = new WebSearchFunctions(this);
+    }
 
     public PluginMetadata Metadata => new(
         Id: "websearch",
@@ -29,9 +35,9 @@ public class WebSearchPlugin : IPlugin
         }
     );
 
-    public void RegisterFunctions(IKernelBuilder builder)
+    public IEnumerable<AIFunction> GetFunctions()
     {
-        builder.Plugins.AddFromObject(new WebSearchFunctions(this), "WebSearch");
+        yield return AIFunctionFactory.Create(_functions.Search, name: "WebSearch_Search");
     }
 
     public Task InitializeAsync(IServiceProvider services, CancellationToken ct = default)
@@ -100,7 +106,7 @@ public class WebSearchFunctions
         _plugin = plugin;
     }
 
-    [KernelFunction, Description("Searches the web for information")]
+    [Description("Searches the web for information")]
     public async Task<string> Search(
         [Description("The search query")] string query,
         [Description("Maximum number of results (default: 5)")] int maxResults = 5)

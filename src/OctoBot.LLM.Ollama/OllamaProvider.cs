@@ -1,6 +1,4 @@
-#pragma warning disable SKEXP0070
-
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 using OctoBot.LLM.Abstractions;
 
 namespace OctoBot.LLM.Ollama;
@@ -27,18 +25,13 @@ public class OllamaProvider : ILLMProvider
         "deepseek-coder-v2"
     };
 
-    public Task<Kernel> CreateKernelAsync(LLMConfiguration config, CancellationToken ct = default)
+    public Task<IChatClient> CreateChatClientAsync(LLMConfiguration config, CancellationToken ct = default)
     {
         var endpoint = config.Endpoint ?? "http://localhost:11434";
 
-        var builder = Kernel.CreateBuilder();
+        IChatClient chatClient = new OllamaChatClient(new Uri(endpoint), config.ModelId);
 
-        builder.AddOllamaChatCompletion(
-            modelId: config.ModelId,
-            endpoint: new Uri(endpoint)
-        );
-
-        return Task.FromResult(builder.Build());
+        return Task.FromResult(chatClient);
     }
 
     public async Task<bool> ValidateConfigurationAsync(LLMConfiguration config, CancellationToken ct = default)

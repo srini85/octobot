@@ -1,4 +1,4 @@
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 
 namespace OctoBot.LLM.Abstractions;
 
@@ -10,6 +10,6 @@ public interface ILLMProvider
     bool SupportsFunctionCalling { get; }
     IReadOnlyList<string> SupportedModels { get; }
 
-    Task<Kernel> CreateKernelAsync(LLMConfiguration config, CancellationToken ct = default);
+    Task<IChatClient> CreateChatClientAsync(LLMConfiguration config, CancellationToken ct = default);
     Task<bool> ValidateConfigurationAsync(LLMConfiguration config, CancellationToken ct = default);
 }

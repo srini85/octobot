@@ -1,11 +1,13 @@
 using System.ComponentModel;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 using OctoBot.Plugins.Abstractions;
 
 namespace OctoBot.Plugins.Core;
 
 public class MathPlugin : IPlugin
 {
+    private readonly MathFunctions _functions = new();
+
     public PluginMetadata Metadata => new(
         Id: "math",
         Name: "Math",
@@ -14,9 +16,15 @@ public class MathPlugin : IPlugin
         Author: "OctoBot"
     );
 
-    public void RegisterFunctions(IKernelBuilder builder)
+    public IEnumerable<AIFunction> GetFunctions()
     {
-        builder.Plugins.AddFromObject(new MathFunctions(), "Math");
+        yield return AIFunctionFactory.Create(_functions.Add, name: "Math_Add");
+        yield return AIFunctionFactory.Create(_functions.Subtract, name: "Math_Subtract");
+        yield return AIFunctionFactory.Create(_functions.Multiply, name: "Math_Multiply");
+        yield return AIFunctionFactory.Create(_functions.Divide, name: "Math_Divide");
+        yield return AIFunctionFactory.Create(_functions.SquareRoot, name: "Math_SquareRoot");
+        yield return AIFunctionFactory.Create(_functions.Power, name: "Math_Power");
+        yield return AIFunctionFactory.Create(_functions.Percentage, name: "Math_Percentage");
     }
 
     public Task InitializeAsync(IServiceProvider services, CancellationToken ct = default)
@@ -32,7 +40,7 @@ public class MathPlugin : IPlugin
 
 public class MathFunctions
 {
-    [KernelFunction, Description("Adds two numbers together")]
+    [Description("Adds two numbers together")]
     public double Add(
         [Description("The first number")] double a,
         [Description("The second number")] double b)
@@ -40,7 +48,7 @@ public class MathFunctions
         return a + b;
     }
 
-    [KernelFunction, Description("Subtracts the second number from the first")]
+    [Description("Subtracts the second number from the first")]
     public double Subtract(
         [Description("The first number")] double a,
         [Description("The second number")] double b)
@@ -48,7 +56,7 @@ public class MathFunctions
         return a - b;
     }
 
-    [KernelFunction, Description("Multiplies two numbers")]
+    [Description("Multiplies two numbers")]
     public double Multiply(
         [Description("The first number")] double a,
         [Description("The second number")] double b)
@@ -56,7 +64,7 @@ public class MathFunctions
         return a * b;
     }
 
-    [KernelFunction, Description("Divides the first number by the second")]
+    [Description("Divides the first number by the second")]
     public string Divide(
         [Description("The dividend")] double a,
         [Description("The divisor")] double b)
@@ -65,14 +73,14 @@ public class MathFunctions
         return (a / b).ToString();
     }
 
-    [KernelFunction, Description("Calculates the square root of a number")]
+    [Description("Calculates the square root of a number")]
     public string SquareRoot([Description("The number")] double n)
     {
         if (n < 0) return "Cannot calculate square root of negative number";
         return Math.Sqrt(n).ToString();
     }
 
-    [KernelFunction, Description("Raises a number to a power")]
+    [Description("Raises a number to a power")]
     public double Power(
         [Description("The base number")] double baseNum,
         [Description("The exponent")] double exponent)
@@ -80,7 +88,7 @@ public class MathFunctions
         return Math.Pow(baseNum, exponent);
     }
 
-    [KernelFunction, Description("Calculates the percentage of a number")]
+    [Description("Calculates the percentage of a number")]
     public double Percentage(
         [Description("The value")] double value,
         [Description("The percentage")] double percent)

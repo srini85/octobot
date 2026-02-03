@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using OctoBot.Core.Entities;
 using OctoBot.Core.Interfaces;
 using OctoBot.Core.ValueObjects;
@@ -16,7 +16,7 @@ public class OctoBotAgent : IOctoBotAgent
     private readonly ILLMProviderRegistry _llmRegistry;
     private readonly IPluginRegistry _pluginRegistry;
     private readonly IConversationMemory _memory;
-    private Kernel? _kernel;
+    private AIAgent? _agent;
 
     public Guid BotInstanceId => _botInstance.Id;
 
@@ -53,23 +53,30 @@ public class OctoBotAgent : IOctoBotAgent
             Endpoint = _botInstance.DefaultLLMConfig.Endpoint
         };
 
-        _kernel = await provider.CreateKernelAsync(llmConfig, ct);
+        var chatClient = await provider.CreateChatClientAsync(llmConfig, ct);
 
-        // Register plugins
+        // Collect plugin functions
+        var tools = new List<AITool>();
         foreach (var pluginConfig in _botInstance.PluginConfigs.Where(p => p.IsEnabled))
         {
             var plugin = _pluginRegistry.GetPlugin(pluginConfig.PluginId);
             if (plugin != null)
             {
-                var builder = Kernel.CreateBuilder();
-                plugin.RegisterFunctions(builder);
+                // AIFunction is a subclass of AITool, cast directly
+                tools.AddRange(plugin.GetFunctions().Cast<AITool>());
             }
         }
+
+        // Create agent from chat client with tools
+        _agent = chatClient.AsAIAgent(
+            instructions: _botInstance.SystemPrompt,
+            tools: tools
+        );
     }
 
     public async Task<string> ProcessMessageAsync(IncomingMessage message, CancellationToken ct = default)
     {
-        if (_kernel == null)
+        if (_agent == null)
         {
             throw new InvalidOperationException("Agent not initialized. Call InitializeAsync first.");
         }
@@ -81,21 +88,20 @@ public class OctoBotAgent : IOctoBotAgent
             ct);
 
         var history = await _memory.GetHistoryAsync(conversation.Id, 50, ct);
-        var chatHistory = BuildChatHistory(history);
-        chatHistory.AddUserMessage(message.Content);
+        var chatMessages = BuildChatMessages(history);
+        chatMessages.Add(new Microsoft.Extensions.AI.ChatMessage(ChatRole.User, message.Content));
 
-        var chatService = _kernel.GetRequiredService<IChatCompletionService>();
-        var response = await chatService.GetChatMessageContentsAsync(chatHistory, cancellationToken: ct);
-        var responseContent = response.FirstOrDefault()?.Content ?? "";
+        var response = await _agent.RunAsync(chatMessages, cancellationToken: ct);
+        var responseContent = response.Text ?? "";
 
         // Save messages to memory
-        await _memory.AddMessageAsync(conversation.Id, new ChatMessage(
+        await _memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
             MessageRole.User,
             message.Content,
             message.Timestamp
         ), ct);
 
-        await _memory.AddMessageAsync(conversation.Id, new ChatMessage(
+        await _memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
             MessageRole.Assistant,
             responseContent,
             DateTime.UtcNow
@@ -108,7 +114,7 @@ public class OctoBotAgent : IOctoBotAgent
         IncomingMessage message,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        if (_kernel == null)
+        if (_agent == null)
         {
             throw new InvalidOperationException("Agent not initialized. Call InitializeAsync first.");
         }
@@ -120,60 +126,53 @@ public class OctoBotAgent : IOctoBotAgent
             ct);
 
         var history = await _memory.GetHistoryAsync(conversation.Id, 50, ct);
-        var chatHistory = BuildChatHistory(history);
-        chatHistory.AddUserMessage(message.Content);
+        var chatMessages = BuildChatMessages(history);
+        chatMessages.Add(new Microsoft.Extensions.AI.ChatMessage(ChatRole.User, message.Content));
 
-        var chatService = _kernel.GetRequiredService<IChatCompletionService>();
         var fullResponse = new StringBuilder();
 
-        await foreach (var chunk in chatService.GetStreamingChatMessageContentsAsync(chatHistory, cancellationToken: ct))
+        await foreach (var update in _agent.RunStreamingAsync(chatMessages, cancellationToken: ct))
         {
-            if (chunk.Content != null)
+            if (update.Text != null)
             {
-                fullResponse.Append(chunk.Content);
-                yield return chunk.Content;
+                fullResponse.Append(update.Text);
+                yield return update.Text;
             }
         }
 
         // Save messages to memory after streaming completes
-        await _memory.AddMessageAsync(conversation.Id, new ChatMessage(
+        await _memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
             MessageRole.User,
             message.Content,
             message.Timestamp
         ), ct);
 
-        await _memory.AddMessageAsync(conversation.Id, new ChatMessage(
+        await _memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
             MessageRole.Assistant,
             fullResponse.ToString(),
             DateTime.UtcNow
         ), ct);
     }
 
-    private ChatHistory BuildChatHistory(IReadOnlyList<ChatMessage> messages)
+    private List<Microsoft.Extensions.AI.ChatMessage> BuildChatMessages(IReadOnlyList<Core.ValueObjects.ChatMessage> messages)
     {
-        var chatHistory = new ChatHistory();
+        var chatMessages = new List<Microsoft.Extensions.AI.ChatMessage>();
 
-        if (!string.IsNullOrEmpty(_botInstance.SystemPrompt))
-        {
-            chatHistory.AddSystemMessage(_botInstance.SystemPrompt);
-        }
+        // System prompt is handled in agent creation, not in message history
 
         foreach (var msg in messages)
         {
-            switch (msg.Role)
+            var role = msg.Role switch
             {
-                case MessageRole.User:
-                    chatHistory.AddUserMessage(msg.Content);
-                    break;
-                case MessageRole.Assistant:
-                    chatHistory.AddAssistantMessage(msg.Content);
-                    break;
-                case MessageRole.System:
-                    chatHistory.AddSystemMessage(msg.Content);
-                    break;
-            }
+                MessageRole.User => ChatRole.User,
+                MessageRole.Assistant => ChatRole.Assistant,
+                MessageRole.System => ChatRole.System,
+                _ => ChatRole.User
+            };
+
+            chatMessages.Add(new Microsoft.Extensions.AI.ChatMessage(role, msg.Content));
         }
 
-        return chatHistory;
+        return chatMessages;
     }
 }

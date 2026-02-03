@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.SemanticKernel.Abstractions" Version="1.54.0" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.0.0-preview.260127.1" />
   </ItemGroup>
 
 </Project>

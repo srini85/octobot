@@ -1,5 +1,5 @@
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.SemanticKernel;
+using Anthropic;
+using Microsoft.Extensions.AI;
 using OctoBot.LLM.Abstractions;
 
 namespace OctoBot.LLM.Anthropic;
@@ -22,18 +22,18 @@ public class AnthropicProvider : ILLMProvider
         "claude-3-haiku-20240307"
     };
 
-    public Task<Kernel> CreateKernelAsync(LLMConfiguration config, CancellationToken ct = default)
+    public Task<IChatClient> CreateChatClientAsync(LLMConfiguration config, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(config.ApiKey))
         {
             throw new ArgumentException("API key is required for Anthropic provider");
         }
 
-        var builder = Kernel.CreateBuilder();
-        var chatService = new AnthropicChatCompletionService(config.ModelId, config.ApiKey);
-        builder.Services.AddSingleton<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>(chatService);
+        var anthropicClient = new AnthropicClient(new() { ApiKey = config.ApiKey });
+        // The Anthropic SDK implements IChatClient - use explicit cast
+        IChatClient chatClient = (IChatClient)anthropicClient;
 
-        return Task.FromResult(builder.Build());
+        return Task.FromResult(chatClient);
     }
 
     public async Task<bool> ValidateConfigurationAsync(LLMConfiguration config, CancellationToken ct = default)

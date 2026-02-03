@@ -1,5 +1,8 @@
-using Microsoft.SemanticKernel;
+using Azure.AI.OpenAI;
+using Microsoft.Extensions.AI;
 using OctoBot.LLM.Abstractions;
+using OpenAI;
+using OpenAI.Chat;
 
 namespace OctoBot.LLM.OpenAI;
 
@@ -22,32 +25,32 @@ public class OpenAIProvider : ILLMProvider
         "o1-preview"
     };
 
-    public Task<Kernel> CreateKernelAsync(LLMConfiguration config, CancellationToken ct = default)
+    public Task<IChatClient> CreateChatClientAsync(LLMConfiguration config, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(config.ApiKey))
         {
             throw new ArgumentException("API key is required for OpenAI provider");
         }
 
-        var builder = Kernel.CreateBuilder();
+        IChatClient chatClient;
 
         if (!string.IsNullOrEmpty(config.Endpoint))
         {
-            builder.AddAzureOpenAIChatCompletion(
-                deploymentName: config.ModelId,
-                endpoint: config.Endpoint,
-                apiKey: config.ApiKey
-            );
+            // Azure OpenAI
+            var azureClient = new AzureOpenAIClient(
+                new Uri(config.Endpoint),
+                new System.ClientModel.ApiKeyCredential(config.ApiKey));
+            var azureChatClient = azureClient.GetChatClient(config.ModelId);
+            chatClient = azureChatClient.AsIChatClient();
         }
         else
         {
-            builder.AddOpenAIChatCompletion(
-                modelId: config.ModelId,
-                apiKey: config.ApiKey
-            );
+            // OpenAI
+            var openAIChatClient = new ChatClient(config.ModelId, new System.ClientModel.ApiKeyCredential(config.ApiKey));
+            chatClient = openAIChatClient.AsIChatClient();
         }
 
-        return Task.FromResult(builder.Build());
+        return Task.FromResult(chatClient);
     }
 
     public async Task<bool> ValidateConfigurationAsync(LLMConfiguration config, CancellationToken ct = default)
@@ -59,7 +62,7 @@ public class OpenAIProvider : ILLMProvider
 
         try
         {
-            var kernel = await CreateKernelAsync(config, ct);
+            var chatClient = await CreateChatClientAsync(config, ct);
             return true;
         }
         catch

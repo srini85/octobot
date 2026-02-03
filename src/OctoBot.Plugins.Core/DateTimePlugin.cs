@@ -1,11 +1,13 @@
 using System.ComponentModel;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 using OctoBot.Plugins.Abstractions;
 
 namespace OctoBot.Plugins.Core;
 
 public class DateTimePlugin : IPlugin
 {
+    private readonly DateTimeFunctions _functions = new();
+
     public PluginMetadata Metadata => new(
         Id: "datetime",
         Name: "Date & Time",
@@ -14,9 +16,12 @@ public class DateTimePlugin : IPlugin
         Author: "OctoBot"
     );
 
-    public void RegisterFunctions(IKernelBuilder builder)
+    public IEnumerable<AIFunction> GetFunctions()
     {
-        builder.Plugins.AddFromObject(new DateTimeFunctions(), "DateTime");
+        yield return AIFunctionFactory.Create(_functions.GetCurrentDateTimeUtc, name: "DateTime_GetCurrentDateTimeUtc");
+        yield return AIFunctionFactory.Create(_functions.GetCurrentDateTime, name: "DateTime_GetCurrentDateTime");
+        yield return AIFunctionFactory.Create(_functions.GetDayOfWeek, name: "DateTime_GetDayOfWeek");
+        yield return AIFunctionFactory.Create(_functions.CalculateDateDifference, name: "DateTime_CalculateDateDifference");
     }
 
     public Task InitializeAsync(IServiceProvider services, CancellationToken ct = default)
@@ -32,13 +37,13 @@ public class DateTimePlugin : IPlugin
 
 public class DateTimeFunctions
 {
-    [KernelFunction, Description("Gets the current date and time in UTC")]
+    [Description("Gets the current date and time in UTC")]
     public string GetCurrentDateTimeUtc()
     {
         return DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss UTC");
     }
 
-    [KernelFunction, Description("Gets the current date and time in a specific timezone")]
+    [Description("Gets the current date and time in a specific timezone")]
     public string GetCurrentDateTime([Description("The timezone ID (e.g., 'America/New_York', 'Europe/London')")] string timezoneId)
     {
         try
@@ -53,13 +58,13 @@ public class DateTimeFunctions
         }
     }
 
-    [KernelFunction, Description("Gets the current day of the week")]
+    [Description("Gets the current day of the week")]
     public string GetDayOfWeek()
     {
         return DateTime.UtcNow.DayOfWeek.ToString();
     }
 
-    [KernelFunction, Description("Calculates the difference between two dates")]
+    [Description("Calculates the difference between two dates")]
     public string CalculateDateDifference(
         [Description("Start date in format yyyy-MM-dd")] string startDate,
         [Description("End date in format yyyy-MM-dd")] string endDate)
