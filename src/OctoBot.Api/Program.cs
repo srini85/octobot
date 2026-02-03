@@ -1,5 +1,6 @@
 using OctoBot.Agent;
 using OctoBot.Application;
+using OctoBot.Application.Services;
 using OctoBot.Channels.Abstractions;
 using OctoBot.Channels.Telegram;
 using OctoBot.Infrastructure;
@@ -45,6 +46,7 @@ builder.Services.AddSingleton<ILLMProviderRegistry, LLMProviderRegistry>();
 // Channels
 builder.Services.AddTelegramChannel();
 builder.Services.AddSingleton<IChannelRegistry, ChannelRegistry>();
+builder.Services.AddSingleton<IChannelManager, ChannelManager>();
 
 // Plugins
 builder.Services.AddCorePlugins();

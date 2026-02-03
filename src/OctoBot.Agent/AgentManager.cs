@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.DependencyInjection;
 using OctoBot.Core.Entities;
 using OctoBot.Core.Interfaces;
 
@@ -14,13 +15,13 @@ public interface IAgentManager
 public class AgentManager : IAgentManager
 {
     private readonly IAgentFactory _agentFactory;
-    private readonly IUnitOfWork _unitOfWork;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ConcurrentDictionary<Guid, IOctoBotAgent> _agents = new();
 
-    public AgentManager(IAgentFactory agentFactory, IUnitOfWork unitOfWork)
+    public AgentManager(IAgentFactory agentFactory, IServiceScopeFactory scopeFactory)
     {
         _agentFactory = agentFactory;
-        _unitOfWork = unitOfWork;
+        _scopeFactory = scopeFactory;
     }
 
     public async Task<IOctoBotAgent> GetOrCreateAgentAsync(Guid botInstanceId, CancellationToken ct = default)
@@ -30,7 +31,9 @@ public class AgentManager : IAgentManager
             return existingAgent;
         }
 
-        var botInstance = await _unitOfWork.BotInstances.GetWithConfigsAsync(botInstanceId, ct);
+        using var scope = _scopeFactory.CreateScope();
+        var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+        var botInstance = await unitOfWork.BotInstances.GetWithConfigsAsync(botInstanceId, ct);
         if (botInstance == null)
         {
             throw new InvalidOperationException($"Bot instance with ID {botInstanceId} not found");

@@ -132,3 +132,5 @@ TestResults/
 
 # Claude
 .claude/
+
+/src/OctoBot.Api/octobot.db*

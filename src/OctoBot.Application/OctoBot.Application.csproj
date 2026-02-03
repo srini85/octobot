@@ -11,10 +11,12 @@
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.11.0" />
     <PackageReference Include="Mapster" Version="7.4.0" />
     <PackageReference Include="MediatR" Version="12.4.1" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.2" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\OctoBot.Core\OctoBot.Core.csproj" />
+    <ProjectReference Include="..\OctoBot.Agent\OctoBot.Agent.csproj" />
     <ProjectReference Include="..\OctoBot.LLM.Abstractions\OctoBot.LLM.Abstractions.csproj" />
     <ProjectReference Include="..\OctoBot.Channels.Abstractions\OctoBot.Channels.Abstractions.csproj" />
     <ProjectReference Include="..\OctoBot.Plugins.Abstractions\OctoBot.Plugins.Abstractions.csproj" />

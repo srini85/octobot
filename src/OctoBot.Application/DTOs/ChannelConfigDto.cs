@@ -10,6 +10,13 @@ public record ChannelConfigDto(
     DateTime UpdatedAt
 );
 
+public record CreateChannelConfigDto(
+    Guid BotInstanceId,
+    string ChannelType,
+    bool IsEnabled,
+    Dictionary<string, string> Settings
+);
+
 public record UpdateChannelConfigDto(
     bool? IsEnabled,
     Dictionary<string, string>? Settings

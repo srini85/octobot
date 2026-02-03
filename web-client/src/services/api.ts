@@ -47,11 +47,32 @@ export const llmApi = {
 // Channels
 export const channelsApi = {
   getAll: () => fetchApi<ChannelInfo[]>('/channels'),
+  getConfigs: (botId: string) => fetchApi<{ id: string; botInstanceId: string; channelType: string; isEnabled: boolean; settings: Record<string, string> }[]>(`/channels/config/${botId}`),
+  getStatus: (botId: string) => fetchApi<{ channelType: string; isRunning: boolean; status: string; startedAt: string | null }[]>(`/channels/${botId}/status`),
+  saveConfig: (dto: { botInstanceId: string; channelType: string; isEnabled: boolean; settings: Record<string, string> }) =>
+    fetchApi<{ id: string }>('/channels/config', {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    }),
+  start: (botId: string, channelType: string) =>
+    fetchApi<{ success: boolean; message: string }>(`/channels/${botId}/start/${channelType}`, {
+      method: 'POST',
+    }),
+  stop: (botId: string, channelType: string) =>
+    fetchApi<{ success: boolean; message: string }>(`/channels/${botId}/stop/${channelType}`, {
+      method: 'POST',
+    }),
 }
 
 // Plugins
 export const pluginsApi = {
   getAll: () => fetchApi<PluginInfo[]>('/plugins'),
+  getBotPlugins: (botId: string) => fetchApi<{ id: string; name: string; description: string; version: string; isEnabled: boolean }[]>(`/plugins/bot/${botId}`),
+  togglePlugin: (botId: string, pluginId: string, isEnabled: boolean) =>
+    fetchApi<{ success: boolean }>(`/plugins/bot/${botId}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ pluginId, isEnabled }),
+    }),
 }
 
 // Conversations

@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using OctoBot.Core.Entities;
 using OctoBot.Core.Interfaces;
 using OctoBot.Core.ValueObjects;
@@ -15,7 +16,7 @@ public class OctoBotAgent : IOctoBotAgent
     private readonly BotInstance _botInstance;
     private readonly ILLMProviderRegistry _llmRegistry;
     private readonly IPluginRegistry _pluginRegistry;
-    private readonly IConversationMemory _memory;
+    private readonly IServiceScopeFactory _scopeFactory;
     private AIAgent? _agent;
 
     public Guid BotInstanceId => _botInstance.Id;
@@ -24,12 +25,12 @@ public class OctoBotAgent : IOctoBotAgent
         BotInstance botInstance,
         ILLMProviderRegistry llmRegistry,
         IPluginRegistry pluginRegistry,
-        IConversationMemory memory)
+        IServiceScopeFactory scopeFactory)
     {
         _botInstance = botInstance;
         _llmRegistry = llmRegistry;
         _pluginRegistry = pluginRegistry;
-        _memory = memory;
+        _scopeFactory = scopeFactory;
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
@@ -81,13 +82,16 @@ public class OctoBotAgent : IOctoBotAgent
             throw new InvalidOperationException("Agent not initialized. Call InitializeAsync first.");
         }
 
-        var conversation = await _memory.GetOrCreateAsync(
+        using var scope = _scopeFactory.CreateScope();
+        var memory = scope.ServiceProvider.GetRequiredService<IConversationMemory>();
+
+        var conversation = await memory.GetOrCreateAsync(
             _botInstance.Id,
             message.ChannelId,
             message.UserId,
             ct);
 
-        var history = await _memory.GetHistoryAsync(conversation.Id, 50, ct);
+        var history = await memory.GetHistoryAsync(conversation.Id, 50, ct);
         var chatMessages = BuildChatMessages(history);
         chatMessages.Add(new Microsoft.Extensions.AI.ChatMessage(ChatRole.User, message.Content));
 
@@ -95,13 +99,13 @@ public class OctoBotAgent : IOctoBotAgent
         var responseContent = response.Text ?? "";
 
         // Save messages to memory
-        await _memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
+        await memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
             MessageRole.User,
             message.Content,
             message.Timestamp
         ), ct);
 
-        await _memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
+        await memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
             MessageRole.Assistant,
             responseContent,
             DateTime.UtcNow
@@ -119,13 +123,16 @@ public class OctoBotAgent : IOctoBotAgent
             throw new InvalidOperationException("Agent not initialized. Call InitializeAsync first.");
         }
 
-        var conversation = await _memory.GetOrCreateAsync(
+        using var scope = _scopeFactory.CreateScope();
+        var memory = scope.ServiceProvider.GetRequiredService<IConversationMemory>();
+
+        var conversation = await memory.GetOrCreateAsync(
             _botInstance.Id,
             message.ChannelId,
             message.UserId,
             ct);
 
-        var history = await _memory.GetHistoryAsync(conversation.Id, 50, ct);
+        var history = await memory.GetHistoryAsync(conversation.Id, 50, ct);
         var chatMessages = BuildChatMessages(history);
         chatMessages.Add(new Microsoft.Extensions.AI.ChatMessage(ChatRole.User, message.Content));
 
@@ -141,13 +148,13 @@ public class OctoBotAgent : IOctoBotAgent
         }
 
         // Save messages to memory after streaming completes
-        await _memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
+        await memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
             MessageRole.User,
             message.Content,
             message.Timestamp
         ), ct);
 
-        await _memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
+        await memory.AddMessageAsync(conversation.Id, new Core.ValueObjects.ChatMessage(
             MessageRole.Assistant,
             fullResponse.ToString(),
             DateTime.UtcNow
