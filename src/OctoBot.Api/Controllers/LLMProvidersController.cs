@@ -47,6 +47,28 @@ public class LLMProvidersController : ControllerBase
         var config = await _mediator.Send(new CreateLLMConfigCommand(dto));
         return Created($"/api/llm-providers/configs/{config.Id}", config);
     }
+
+    [HttpPut("configs/{id:guid}")]
+    public async Task<ActionResult<LLMConfigDto>> UpdateConfig(Guid id, [FromBody] UpdateLLMConfigDto dto)
+    {
+        var config = await _mediator.Send(new UpdateLLMConfigCommand(id, dto));
+        if (config == null)
+        {
+            return NotFound();
+        }
+        return Ok(config);
+    }
+
+    [HttpDelete("configs/{id:guid}")]
+    public async Task<ActionResult> DeleteConfig(Guid id)
+    {
+        var result = await _mediator.Send(new DeleteLLMConfigCommand(id));
+        if (!result)
+        {
+            return NotFound();
+        }
+        return NoContent();
+    }
 }
 
 public record LLMProviderInfo(

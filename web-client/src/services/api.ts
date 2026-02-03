@@ -42,6 +42,13 @@ export const llmApi = {
       method: 'POST',
       body: JSON.stringify(dto),
     }),
+  updateConfig: (id: string, dto: { name?: string; modelId?: string; apiKey?: string; endpoint?: string }) =>
+    fetchApi<LLMConfig>(`/llm-providers/configs/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(dto),
+    }),
+  deleteConfig: (id: string) =>
+    fetch(`${API_BASE}/llm-providers/configs/${id}`, { method: 'DELETE' }),
 }
 
 // Channels
