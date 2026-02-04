@@ -6,6 +6,7 @@ import Channels from './pages/Channels'
 import Plugins from './pages/Plugins'
 import LLMSettings from './pages/LLMSettings'
 import Conversations from './pages/Conversations'
+import ScheduledJobs from './pages/ScheduledJobs'
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
         <Route path="bots/:id/plugins" element={<Plugins />} />
         <Route path="bots/:id/conversations" element={<Conversations />} />
         <Route path="llm-settings" element={<LLMSettings />} />
+        <Route path="scheduled-jobs" element={<ScheduledJobs />} />
       </Route>
     </Routes>
   )

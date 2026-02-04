@@ -8,6 +8,8 @@ public interface IUnitOfWork : IDisposable
     IRepository<Entities.ChannelConfig> ChannelConfigs { get; }
     IRepository<Entities.PluginConfig> PluginConfigs { get; }
     IRepository<Entities.LLMConfig> LLMConfigs { get; }
+    IRepository<Entities.ScheduledJob> ScheduledJobs { get; }
+    IRepository<Entities.JobExecution> JobExecutions { get; }
 
     Task<int> SaveChangesAsync(CancellationToken ct = default);
     Task BeginTransactionAsync(CancellationToken ct = default);

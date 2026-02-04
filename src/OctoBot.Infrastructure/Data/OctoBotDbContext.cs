@@ -15,6 +15,8 @@ public class OctoBotDbContext : DbContext
     public DbSet<ChannelConfig> ChannelConfigs => Set<ChannelConfig>();
     public DbSet<PluginConfig> PluginConfigs => Set<PluginConfig>();
     public DbSet<LLMConfig> LLMConfigs => Set<LLMConfig>();
+    public DbSet<ScheduledJob> ScheduledJobs => Set<ScheduledJob>();
+    public DbSet<JobExecution> JobExecutions => Set<JobExecution>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -94,6 +96,43 @@ public class OctoBotDbContext : DbContext
             entity.Property(e => e.ModelId).HasMaxLength(100);
             entity.Property(e => e.Endpoint).HasMaxLength(500);
             entity.HasIndex(e => e.Name).IsUnique();
+        });
+
+        modelBuilder.Entity<ScheduledJob>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Description).HasMaxLength(500);
+            entity.Property(e => e.Instructions).IsRequired().HasMaxLength(10000);
+            entity.Property(e => e.CronExpression).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.LastRunStatus).HasMaxLength(50);
+            entity.HasIndex(e => new { e.BotInstanceId, e.Name }).IsUnique();
+            entity.HasIndex(e => new { e.IsEnabled, e.NextRunAt });
+
+            entity.HasOne(e => e.BotInstance)
+                .WithMany()
+                .HasForeignKey(e => e.BotInstanceId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.TargetChannelConfig)
+                .WithMany()
+                .HasForeignKey(e => e.TargetChannelConfigId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<JobExecution>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Output).HasMaxLength(50000);
+            entity.Property(e => e.ErrorMessage).HasMaxLength(2000);
+            entity.HasIndex(e => e.ScheduledJobId);
+            entity.HasIndex(e => e.StartedAt);
+
+            entity.HasOne(e => e.ScheduledJob)
+                .WithMany(j => j.Executions)
+                .HasForeignKey(e => e.ScheduledJobId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

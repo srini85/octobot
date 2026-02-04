@@ -1,10 +1,11 @@
 import { Link, Outlet, useLocation } from 'react-router-dom'
-import { Bot, Home, Settings, MessageSquare, Puzzle, Radio, Menu } from 'lucide-react'
+import { Bot, Home, Settings, MessageSquare, Puzzle, Radio, Menu, Clock } from 'lucide-react'
 import { useAppStore } from '../stores/appStore'
 
 const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: Home },
   { path: '/llm-settings', label: 'LLM Settings', icon: Settings },
+  { path: '/scheduled-jobs', label: 'Scheduled Jobs', icon: Clock },
 ]
 
 export default function Layout() {

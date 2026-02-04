@@ -4,6 +4,7 @@ using OctoBot.Application.Services;
 using OctoBot.Channels.Abstractions;
 using OctoBot.Channels.Telegram;
 using OctoBot.Infrastructure;
+using OctoBot.Api.Services;
 using OctoBot.LLM.Abstractions;
 using OctoBot.LLM.Anthropic;
 using OctoBot.LLM.Ollama;
@@ -51,6 +52,10 @@ builder.Services.AddSingleton<IChannelManager, ChannelManager>();
 // Plugins
 builder.Services.AddCorePlugins();
 builder.Services.AddSingleton<IPluginRegistry, PluginRegistry>();
+
+// Scheduled Jobs
+builder.Services.AddSingleton<ScheduledJobService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ScheduledJobService>());
 
 var app = builder.Build();
 

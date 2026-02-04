@@ -16,6 +16,8 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<ChannelConfig>? _channelConfigs;
     private IRepository<PluginConfig>? _pluginConfigs;
     private IRepository<LLMConfig>? _llmConfigs;
+    private IRepository<ScheduledJob>? _scheduledJobs;
+    private IRepository<JobExecution>? _jobExecutions;
 
     public UnitOfWork(OctoBotDbContext context)
     {
@@ -39,6 +41,12 @@ public class UnitOfWork : IUnitOfWork
 
     public IRepository<LLMConfig> LLMConfigs =>
         _llmConfigs ??= new Repository<LLMConfig>(_context);
+
+    public IRepository<ScheduledJob> ScheduledJobs =>
+        _scheduledJobs ??= new Repository<ScheduledJob>(_context);
+
+    public IRepository<JobExecution> JobExecutions =>
+        _jobExecutions ??= new Repository<JobExecution>(_context);
 
     public async Task<int> SaveChangesAsync(CancellationToken ct = default)
     {

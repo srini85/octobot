@@ -1,4 +1,4 @@
-import type { BotInstance, CreateBotDto, UpdateBotDto, LLMProvider, LLMConfig, ChannelInfo, PluginInfo, Conversation, Message } from '../types'
+import type { BotInstance, CreateBotDto, UpdateBotDto, LLMProvider, LLMConfig, ChannelInfo, PluginInfo, Conversation, Message, ScheduledJob, CreateScheduledJobDto, UpdateScheduledJobDto, JobExecution } from '../types'
 
 const API_BASE = '/api'
 
@@ -96,4 +96,27 @@ export const chatApi = {
       method: 'POST',
       body: JSON.stringify({ message, userId }),
     }),
+}
+
+// Scheduled Jobs
+export const scheduledJobsApi = {
+  getAll: () => fetchApi<ScheduledJob[]>('/scheduledjobs'),
+  getById: (id: string) => fetchApi<ScheduledJob>(`/scheduledjobs/${id}`),
+  create: (dto: CreateScheduledJobDto) => fetchApi<ScheduledJob>('/scheduledjobs', {
+    method: 'POST',
+    body: JSON.stringify(dto),
+  }),
+  update: (id: string, dto: UpdateScheduledJobDto) => fetchApi<ScheduledJob>(`/scheduledjobs/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(dto),
+  }),
+  delete: (id: string) => fetch(`${API_BASE}/scheduledjobs/${id}`, { method: 'DELETE' }),
+  toggle: (id: string, enabled: boolean) => fetchApi<ScheduledJob>(`/scheduledjobs/${id}/toggle`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  }),
+  getExecutions: (id: string, limit = 50) => fetchApi<JobExecution[]>(`/scheduledjobs/${id}/executions?limit=${limit}`),
+  runNow: (id: string) => fetchApi<{ message: string }>(`/scheduledjobs/${id}/run`, {
+    method: 'POST',
+  }),
 }

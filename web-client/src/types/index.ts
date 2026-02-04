@@ -82,3 +82,49 @@ export interface Message {
   content: string
   createdAt: string
 }
+
+export interface ScheduledJob {
+  id: string
+  name: string
+  description?: string
+  instructions: string
+  cronExpression: string
+  botInstanceId: string
+  botName?: string
+  targetChannelConfigId?: string
+  targetChannelType?: string
+  isEnabled: boolean
+  lastRunAt?: string
+  nextRunAt?: string
+  lastRunStatus?: 'Success' | 'Failed' | 'Running'
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateScheduledJobDto {
+  name: string
+  description?: string
+  instructions: string
+  cronExpression: string
+  botInstanceId: string
+  targetChannelConfigId?: string
+}
+
+export interface UpdateScheduledJobDto {
+  name?: string
+  description?: string
+  instructions?: string
+  cronExpression?: string
+  targetChannelConfigId?: string
+  isEnabled?: boolean
+}
+
+export interface JobExecution {
+  id: string
+  scheduledJobId: string
+  startedAt: string
+  completedAt?: string
+  status: 'Running' | 'Completed' | 'Failed'
+  output?: string
+  errorMessage?: string
+}
