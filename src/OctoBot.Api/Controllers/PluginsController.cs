@@ -196,7 +196,7 @@ public class PluginsController : ControllerBase
             + $"?client_id={Uri.EscapeDataString(clientId)}"
             + $"&response_type=code"
             + $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"
-            + $"&scope={Uri.EscapeDataString("offline_access Mail.Read User.Read")}"
+            + $"&scope={Uri.EscapeDataString("offline_access Mail.Read Mail.Send User.Read")}"
             + $"&state={Uri.EscapeDataString(state)}"
             + $"&response_mode=query";
 
@@ -244,7 +244,7 @@ public class PluginsController : ControllerBase
             ["grant_type"] = "authorization_code",
             ["code"] = code,
             ["redirect_uri"] = redirectUri,
-            ["scope"] = "offline_access Mail.Read User.Read"
+            ["scope"] = "offline_access Mail.Read Mail.Send User.Read"
         };
         if (!string.IsNullOrEmpty(clientSecret))
             tokenRequest["client_secret"] = clientSecret;

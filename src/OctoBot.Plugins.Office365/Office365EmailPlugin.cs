@@ -3,7 +3,9 @@ using System.Text;
 using System.Text.Json;
 using MailKit;
 using MailKit.Net.Imap;
+using MailKit.Net.Smtp;
 using MailKit.Search;
+using MimeKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Graph;
@@ -35,6 +37,8 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
     private string _imapServer = "outlook.office365.com";
     private int _imapPort = 993;
     private bool _useSsl = true;
+    private string _smtpServer = "smtp.office365.com";
+    private int _smtpPort = 587;
 
     // Microsoft Graph mode (delegated OAuth)
     private string? _clientId;
@@ -70,17 +74,17 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
             1. Enable [2-Step Verification](https://myaccount.google.com/security) on your Google account.
             2. Go to [App Passwords](https://myaccount.google.com/apppasswords) and generate one for "Mail".
             3. Enter your Gmail address and the generated App Password.
-            4. Set IMAP Server to `imap.gmail.com`.
+            4. Set IMAP Server to `imap.gmail.com`, SMTP Server to `smtp.gmail.com`.
 
             **Yahoo Mail:**
             1. Enable [2-Step Verification](https://login.yahoo.com/account/security).
             2. Generate an App Password under "Other apps".
-            3. Set IMAP Server to `imap.mail.yahoo.com`.
+            3. Set IMAP Server to `imap.mail.yahoo.com`, SMTP Server to `smtp.mail.yahoo.com`.
 
             **Personal Outlook.com / Hotmail:**
             1. Go to [Microsoft Account Security](https://account.microsoft.com/security) and enable Two-Step Verification.
             2. Create an [App Password](https://account.microsoft.com/security/extra-security).
-            3. IMAP Server: `outlook.office365.com` (default).
+            3. IMAP Server: `outlook.office365.com` (default), SMTP Server: `smtp.office365.com` (default).
 
             ---
 
@@ -103,7 +107,7 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
             **Step 3: Add API permissions**
             1. Go to **API permissions** → **Add a permission** → **Microsoft Graph**.
             2. Choose **Delegated permissions**.
-            3. Add: `Mail.Read`, `User.Read`, `offline_access`.
+            3. Add: `Mail.Read`, `Mail.Send`, `User.Read`, `offline_access`.
             4. Click **Grant admin consent** if required by your organization.
 
             **Step 4: Save settings and connect**
@@ -114,6 +118,15 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
 
             After connecting, click **Test Connection** to verify.
             Then create a **Scheduled Job** (e.g. every 5 minutes: `*/5 * * * *`) with instructions like "Check for new emails and notify me".
+
+            ---
+
+            ### Replying to Emails
+
+            You can ask the bot to reply to an email. It will:
+            1. List your recent emails so you can pick one.
+            2. Draft a reply for your review.
+            3. Send it only after you confirm.
             """,
         Settings: new[]
         {
@@ -165,6 +178,22 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
                 DefaultValue: "true"
             ),
             new PluginSettingDefinition(
+                Key: "SmtpServer",
+                DisplayName: "SMTP Server",
+                Description: "For IMAP mode: SMTP server for sending replies (e.g. smtp.office365.com, smtp.gmail.com)",
+                Type: PluginSettingType.String,
+                IsRequired: false,
+                DefaultValue: "smtp.office365.com"
+            ),
+            new PluginSettingDefinition(
+                Key: "SmtpPort",
+                DisplayName: "SMTP Port",
+                Description: "For IMAP mode: SMTP server port (usually 587 for STARTTLS)",
+                Type: PluginSettingType.Number,
+                IsRequired: false,
+                DefaultValue: "587"
+            ),
+            new PluginSettingDefinition(
                 Key: "ClientId",
                 DisplayName: "Client ID",
                 Description: "For Microsoft Graph mode: Azure AD Application (client) ID",
@@ -200,6 +229,8 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
     public IEnumerable<AIFunction> GetFunctions()
     {
         yield return AIFunctionFactory.Create(_functions.CheckNewEmails, name: "Office365Email_CheckNewEmails");
+        yield return AIFunctionFactory.Create(_functions.GetRecentEmails, name: "Office365Email_GetRecentEmails");
+        yield return AIFunctionFactory.Create(_functions.ReplyToEmail, name: "Office365Email_ReplyToEmail");
     }
 
     public Task InitializeAsync(IServiceProvider services, CancellationToken ct = default)
@@ -231,6 +262,10 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
             _imapPort = p;
         if (settings.TryGetValue("UseSsl", out var ssl))
             _useSsl = ssl.Equals("true", StringComparison.OrdinalIgnoreCase);
+        if (settings.TryGetValue("SmtpServer", out var smtpServer) && !string.IsNullOrEmpty(smtpServer))
+            _smtpServer = smtpServer;
+        if (settings.TryGetValue("SmtpPort", out var smtpPort) && int.TryParse(smtpPort, out var sp))
+            _smtpPort = sp;
 
         // Microsoft Graph mode
         if (settings.TryGetValue("ClientId", out var clientId))
@@ -294,7 +329,7 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
             ["client_id"] = _clientId,
             ["grant_type"] = "refresh_token",
             ["refresh_token"] = _refreshToken,
-            ["scope"] = "offline_access Mail.Read User.Read"
+            ["scope"] = "offline_access Mail.Read Mail.Send User.Read"
         };
         if (!string.IsNullOrEmpty(_clientSecret))
             tokenRequest["client_secret"] = _clientSecret;
@@ -480,6 +515,213 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
         {
             return $"Error checking emails: {ex.Message}";
         }
+    }
+
+    internal async Task<string> GetRecentEmailsAsync(int count = 10)
+    {
+        var error = ValidateConfig();
+        if (error != null)
+            return $"Email plugin is not configured: {error}";
+
+        try
+        {
+            if (IsGraphMode)
+                return await GetRecentEmailsViaGraphAsync(count);
+            else
+                return await GetRecentEmailsViaImapAsync(count);
+        }
+        catch (ODataError odataError)
+        {
+            var code = odataError.Error?.Code ?? "Unknown";
+            var msg = odataError.Error?.Message ?? odataError.Message;
+            return $"Graph API error ({code}): {msg}";
+        }
+        catch (Exception ex)
+        {
+            return $"Error getting emails: {ex.Message}";
+        }
+    }
+
+    private async Task<string> GetRecentEmailsViaGraphAsync(int count)
+    {
+        var graphClient = await GetGraphClientAsync();
+        if (graphClient == null)
+            return "Not connected to Office 365. Please reconnect from the plugin settings page.";
+
+        var messages = await graphClient.Me.Messages.GetAsync(config =>
+        {
+            config.QueryParameters.Top = count;
+            config.QueryParameters.Select = new[] { "id", "subject", "from", "receivedDateTime", "bodyPreview", "isRead" };
+            config.QueryParameters.Orderby = new[] { "receivedDateTime desc" };
+        });
+
+        if (messages?.Value == null || messages.Value.Count == 0)
+            return "No emails found.";
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Found {messages.Value.Count} recent email(s):\n");
+
+        foreach (var email in messages.Value)
+        {
+            var sender = email.From?.EmailAddress?.Name ?? email.From?.EmailAddress?.Address ?? "Unknown";
+            var subject = email.Subject ?? "(No Subject)";
+            var date = email.ReceivedDateTime?.ToString("g") ?? "Unknown";
+            var readStatus = email.IsRead == true ? "Read" : "Unread";
+            var preview = email.BodyPreview ?? "";
+            if (preview.Length > 100) preview = preview[..100] + "...";
+
+            sb.AppendLine($"- **ID:** {email.Id}");
+            sb.AppendLine($"  **From:** {sender}");
+            sb.AppendLine($"  **Subject:** {subject}");
+            sb.AppendLine($"  **Date:** {date} ({readStatus})");
+            sb.AppendLine($"  **Preview:** {preview}");
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private async Task<string> GetRecentEmailsViaImapAsync(int count)
+    {
+        using var client = new ImapClient();
+        await client.ConnectAsync(_imapServer, _imapPort, _useSsl);
+        await client.AuthenticateAsync(_email, _password);
+
+        var inbox = client.Inbox;
+        await inbox.OpenAsync(FolderAccess.ReadOnly);
+
+        if (inbox.Count == 0)
+        {
+            await client.DisconnectAsync(true);
+            return "No emails found.";
+        }
+
+        var startIndex = Math.Max(0, inbox.Count - count);
+        var summaries = await inbox.FetchAsync(startIndex, -1,
+            MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.Flags);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Found {summaries.Count} recent email(s):\n");
+
+        foreach (var summary in summaries.OrderByDescending(s => s.Date))
+        {
+            var sender = summary.Envelope.From?.Mailboxes?.FirstOrDefault()?.Name
+                ?? summary.Envelope.From?.Mailboxes?.FirstOrDefault()?.Address ?? "Unknown";
+            var subject = summary.Envelope.Subject ?? "(No Subject)";
+            var date = summary.Date.LocalDateTime.ToString("g");
+            var readStatus = summary.Flags?.HasFlag(MessageFlags.Seen) == true ? "Read" : "Unread";
+
+            sb.AppendLine($"- **ID:** {summary.UniqueId}");
+            sb.AppendLine($"  **From:** {sender}");
+            sb.AppendLine($"  **Subject:** {subject}");
+            sb.AppendLine($"  **Date:** {date} ({readStatus})");
+            sb.AppendLine();
+        }
+
+        await client.DisconnectAsync(true);
+        return sb.ToString();
+    }
+
+    internal async Task<string> ReplyToEmailAsync(string messageId, string replyBody)
+    {
+        var error = ValidateConfig();
+        if (error != null)
+            return $"Email plugin is not configured: {error}";
+
+        try
+        {
+            if (IsGraphMode)
+                return await ReplyToEmailViaGraphAsync(messageId, replyBody);
+            else
+                return await ReplyToEmailViaImapAsync(messageId, replyBody);
+        }
+        catch (ODataError odataError)
+        {
+            var code = odataError.Error?.Code ?? "Unknown";
+            var msg = odataError.Error?.Message ?? odataError.Message;
+            return $"Graph API error ({code}): {msg}";
+        }
+        catch (Exception ex)
+        {
+            return $"Error sending reply: {ex.Message}";
+        }
+    }
+
+    private async Task<string> ReplyToEmailViaGraphAsync(string messageId, string replyBody)
+    {
+        var graphClient = await GetGraphClientAsync();
+        if (graphClient == null)
+            return "Not connected to Office 365. Please reconnect from the plugin settings page.";
+
+        await graphClient.Me.Messages[messageId].Reply.PostAsync(
+            new Microsoft.Graph.Me.Messages.Item.Reply.ReplyPostRequestBody
+            {
+                Comment = replyBody
+            });
+
+        return "Reply sent successfully.";
+    }
+
+    private async Task<string> ReplyToEmailViaImapAsync(string messageId, string replyBody)
+    {
+        if (!uint.TryParse(messageId, out var uid))
+            return "Invalid message ID. Please use the ID from GetRecentEmails.";
+
+        // Fetch the original message via IMAP
+        using var imapClient = new ImapClient();
+        await imapClient.ConnectAsync(_imapServer, _imapPort, _useSsl);
+        await imapClient.AuthenticateAsync(_email, _password);
+
+        var inbox = imapClient.Inbox;
+        await inbox.OpenAsync(FolderAccess.ReadOnly);
+
+        var originalMessage = await inbox.GetMessageAsync(new UniqueId(uid));
+        await imapClient.DisconnectAsync(true);
+
+        if (originalMessage == null)
+            return "Could not find the original email to reply to.";
+
+        // Build the reply
+        var reply = new MimeMessage();
+        reply.From.Add(new MailboxAddress(_email, _email));
+
+        // Reply to the sender
+        if (originalMessage.ReplyTo.Count > 0)
+            reply.To.AddRange(originalMessage.ReplyTo);
+        else
+            reply.To.AddRange(originalMessage.From);
+
+        // Set subject
+        var subject = originalMessage.Subject ?? "";
+        reply.Subject = subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
+            ? subject
+            : $"Re: {subject}";
+
+        // Set In-Reply-To and References headers
+        if (!string.IsNullOrEmpty(originalMessage.MessageId))
+        {
+            reply.InReplyTo = originalMessage.MessageId;
+            foreach (var reference in originalMessage.References)
+                reply.References.Add(reference);
+            reply.References.Add(originalMessage.MessageId);
+        }
+
+        // Build body with quoted original
+        var originalSender = originalMessage.From?.Mailboxes?.FirstOrDefault()?.Address ?? "unknown";
+        var originalDate = originalMessage.Date.LocalDateTime.ToString("f");
+        var originalText = originalMessage.TextBody ?? "";
+
+        var bodyText = $"{replyBody}\n\nOn {originalDate}, {originalSender} wrote:\n> {originalText.Replace("\n", "\n> ")}";
+        reply.Body = new TextPart("plain") { Text = bodyText };
+
+        // Send via SMTP
+        using var smtpClient = new MailKit.Net.Smtp.SmtpClient();
+        await smtpClient.ConnectAsync(_smtpServer, _smtpPort, MailKit.Security.SecureSocketOptions.StartTls);
+        await smtpClient.AuthenticateAsync(_email, _password);
+        await smtpClient.SendAsync(reply);
+        await smtpClient.DisconnectAsync(true);
+
+        return "Reply sent successfully.";
     }
 
     private async Task<string> CheckNewEmailsViaGraphAsync(string botToken, List<long> chatIds)
