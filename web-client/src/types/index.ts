@@ -63,6 +63,7 @@ export interface PluginSettingDefinition {
   type: 'String' | 'Secret' | 'Number' | 'Boolean' | 'Select'
   isRequired: boolean
   defaultValue?: string
+  options?: string[]
 }
 
 export interface PluginInfo {
@@ -71,8 +72,10 @@ export interface PluginInfo {
   description: string
   version: string
   author?: string
+  readMe?: string
   dependencies?: string[]
   settings?: PluginSettingDefinition[]
+  isTestable?: boolean
 }
 
 export interface BotPluginStatus {

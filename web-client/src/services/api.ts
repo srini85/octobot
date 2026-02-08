@@ -80,13 +80,11 @@ export const pluginsApi = {
       method: 'POST',
       body: JSON.stringify({ pluginId, isEnabled, settings }),
     }),
-}
-
-// Office 365 Auth
-export const office365Api = {
-  getAuthUrl: (botId: string) => fetchApi<{ authUrl: string; redirectUri: string }>(`/office365/auth-url?botId=${botId}`),
-  getStatus: (botId: string) => fetchApi<{ connected: boolean; email?: string; connectedAt?: string }>(`/office365/status/${botId}`),
-  disconnect: (botId: string) => fetchApi<{ success: boolean }>(`/office365/disconnect/${botId}`, { method: 'POST' }),
+  testConnection: (botId: string, pluginId: string, settings?: Record<string, string>) =>
+    fetchApi<{ success: boolean; message: string }>(`/plugins/bot/${botId}/test-connection/${pluginId}`, {
+      method: 'POST',
+      body: JSON.stringify(settings ?? {}),
+    }),
 }
 
 // Conversations

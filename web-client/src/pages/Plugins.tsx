@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Puzzle, Settings, ChevronDown, ChevronUp, Save, Mail, Link2, Unlink } from 'lucide-react'
-import { pluginsApi, office365Api } from '../services/api'
+import { Puzzle, Settings, ChevronDown, ChevronUp, Save, BookOpen, Plug } from 'lucide-react'
+import { pluginsApi } from '../services/api'
 import type { PluginInfo } from '../types'
 
 export default function Plugins() {
@@ -11,6 +11,7 @@ export default function Plugins() {
   const [expandedPlugin, setExpandedPlugin] = useState<string | null>(null)
   const [pluginSettings, setPluginSettings] = useState<Record<string, Record<string, string>>>({})
   const [saveStatus, setSaveStatus] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
+  const [testStatus, setTestStatus] = useState<Record<string, { testing: boolean; result?: { success: boolean; message: string } }>>({})
 
   // Fetch plugin definitions (with setting definitions)
   const { data: pluginDefs } = useQuery({
@@ -24,26 +25,6 @@ export default function Plugins() {
     queryFn: () => pluginsApi.getBotPlugins(botId!),
     enabled: !!botId,
   })
-
-  // Office 365 connection status
-  const { data: office365Status, refetch: refetchO365Status } = useQuery({
-    queryKey: ['office365Status', botId],
-    queryFn: () => office365Api.getStatus(botId!),
-    enabled: !!botId,
-  })
-
-  // Listen for popup callback
-  const handleMessage = useCallback((event: MessageEvent) => {
-    if (event.data?.type === 'office365-auth-complete') {
-      refetchO365Status()
-      queryClient.invalidateQueries({ queryKey: ['botPlugins', botId] })
-    }
-  }, [refetchO365Status, queryClient, botId])
-
-  useEffect(() => {
-    window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
-  }, [handleMessage])
 
   // Pre-populate settings from saved configs
   useEffect(() => {
@@ -62,14 +43,6 @@ export default function Plugins() {
     mutationFn: ({ pluginId, isEnabled, settings }: { pluginId: string; isEnabled: boolean; settings?: Record<string, string> }) =>
       pluginsApi.togglePlugin(botId!, pluginId, isEnabled, settings),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['botPlugins', botId] })
-    },
-  })
-
-  const disconnectMutation = useMutation({
-    mutationFn: () => office365Api.disconnect(botId!),
-    onSuccess: () => {
-      refetchO365Status()
       queryClient.invalidateQueries({ queryKey: ['botPlugins', botId] })
     },
   })
@@ -112,18 +85,24 @@ export default function Plugins() {
     }
   }
 
-  const handleConnectOffice365 = async () => {
+  const handleTestConnection = async (pluginId: string) => {
     if (!botId) return
+    setTestStatus(prev => ({ ...prev, [pluginId]: { testing: true } }))
+
     try {
-      const { authUrl } = await office365Api.getAuthUrl(botId)
-      // Open in popup
-      const width = 600
-      const height = 700
-      const left = window.screenX + (window.outerWidth - width) / 2
-      const top = window.screenY + (window.outerHeight - height) / 2
-      window.open(authUrl, 'office365-auth', `width=${width},height=${height},left=${left},top=${top}`)
-    } catch (err) {
-      console.error('Failed to get auth URL:', err)
+      const result = await pluginsApi.testConnection(botId, pluginId, pluginSettings[pluginId] || {})
+      setTestStatus(prev => ({ ...prev, [pluginId]: { testing: false, result } }))
+      setTimeout(() => {
+        setTestStatus(prev => ({ ...prev, [pluginId]: { testing: false } }))
+      }, 5000)
+    } catch {
+      setTestStatus(prev => ({
+        ...prev,
+        [pluginId]: { testing: false, result: { success: false, message: 'Failed to test connection' } },
+      }))
+      setTimeout(() => {
+        setTestStatus(prev => ({ ...prev, [pluginId]: { testing: false } }))
+      }, 5000)
     }
   }
 
@@ -136,15 +115,12 @@ export default function Plugins() {
     return (def?.settings?.length ?? 0) > 0
   }
 
-  // Filter out internal OAuth settings from display
   const getDisplaySettings = (pluginId: string) => {
     const def = getPluginDef(pluginId)
     return def?.settings?.filter(s =>
-      !['AccessToken', 'RefreshToken', 'TokenExpiry', 'ConnectedEmail', 'ConnectedAt', 'LastCheckTime'].includes(s.key)
+      !['LastCheckTime'].includes(s.key)
     )
   }
-
-  const isOffice365Plugin = (pluginId: string) => pluginId === 'office365-email'
 
   if (isLoading) {
     return (
@@ -162,8 +138,11 @@ export default function Plugins() {
       <div className="space-y-4">
         {botPlugins?.map((plugin) => {
           const isExpanded = expandedPlugin === plugin.id
-          const pluginHasSettings = hasSettings(plugin.id) || isOffice365Plugin(plugin.id)
+          const pluginDef = getPluginDef(plugin.id)
+          const pluginHasSettings = hasSettings(plugin.id) || !!pluginDef?.readMe
           const displaySettings = getDisplaySettings(plugin.id)
+          const isTestable = pluginDef?.isTestable ?? false
+          const test = testStatus[plugin.id]
 
           return (
             <div key={plugin.id} className={`bg-white rounded-lg shadow border-2 ${plugin.isEnabled ? 'border-green-500' : 'border-transparent'}`}>
@@ -171,10 +150,7 @@ export default function Plugins() {
               <div className="p-6">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
-                    {isOffice365Plugin(plugin.id)
-                      ? <Mail size={24} className={plugin.isEnabled ? 'text-blue-600' : 'text-gray-400'} />
-                      : <Puzzle size={24} className={plugin.isEnabled ? 'text-green-600' : 'text-gray-400'} />
-                    }
+                    <Puzzle size={24} className={plugin.isEnabled ? 'text-green-600' : 'text-gray-400'} />
                     <div>
                       <h3 className="font-semibold text-lg">{plugin.name}</h3>
                       <p className="text-sm text-gray-500">v{plugin.version}</p>
@@ -221,58 +197,23 @@ export default function Plugins() {
               {/* Settings panel */}
               {pluginHasSettings && isExpanded && (
                 <div className="border-t border-gray-200 bg-gray-50 p-6">
-                  {/* Office 365 connection section */}
-                  {isOffice365Plugin(plugin.id) && (
+                  {/* Plugin ReadMe / Instructions */}
+                  {pluginDef?.readMe && (
                     <div className="mb-6">
-                      <h4 className="text-sm font-semibold text-gray-700 mb-3">Office 365 Connection</h4>
-                      {office365Status?.connected ? (
-                        <div className="flex items-center justify-between bg-white rounded-lg border border-green-200 p-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
-                              <Mail size={20} className="text-green-600" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-medium text-gray-900">Connected to Office 365</p>
-                              <p className="text-xs text-gray-500">{office365Status.email}</p>
-                              {office365Status.connectedAt && (
-                                <p className="text-xs text-gray-400">
-                                  Connected {new Date(office365Status.connectedAt).toLocaleDateString()}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => disconnectMutation.mutate()}
-                            disabled={disconnectMutation.isPending}
-                            className="flex items-center gap-1.5 text-sm text-red-600 hover:text-red-800 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
-                          >
-                            <Unlink size={14} />
-                            {disconnectMutation.isPending ? 'Disconnecting...' : 'Disconnect'}
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="bg-white rounded-lg border border-gray-200 p-4">
-                          <p className="text-sm text-gray-600 mb-3">
-                            Connect your Office 365 account to monitor your inbox. Email notifications will be sent to your Telegram conversations with this bot.
-                          </p>
-                          <button
-                            onClick={handleConnectOffice365}
-                            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2.5 rounded-lg hover:bg-blue-700 transition-colors"
-                          >
-                            <Link2 size={16} />
-                            Connect to Office 365
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2 mb-3">
+                        <BookOpen size={16} className="text-blue-600" />
+                        <h4 className="text-sm font-semibold text-gray-700">Setup Instructions</h4>
+                      </div>
+                      <div className="bg-white rounded-lg border border-blue-100 p-4 prose prose-sm max-w-none text-gray-700 whitespace-pre-line">
+                        {pluginDef.readMe}
+                      </div>
                     </div>
                   )}
 
                   {/* Regular settings */}
                   {displaySettings && displaySettings.length > 0 && (
                     <>
-                      <h4 className="text-sm font-semibold text-gray-700 mb-4">
-                        {isOffice365Plugin(plugin.id) ? 'Additional Settings' : 'Plugin Settings'}
-                      </h4>
+                      <h4 className="text-sm font-semibold text-gray-700 mb-4">Plugin Settings</h4>
                       <div className="space-y-4">
                         {displaySettings.map((setting) => (
                           <div key={setting.key}>
@@ -281,7 +222,17 @@ export default function Plugins() {
                               {setting.isRequired && <span className="text-red-500 ml-1">*</span>}
                             </label>
                             <p className="text-xs text-gray-500 mb-2">{setting.description}</p>
-                            {setting.type === 'Boolean' ? (
+                            {setting.type === 'Select' && setting.options ? (
+                              <select
+                                value={pluginSettings[plugin.id]?.[setting.key] || setting.defaultValue || ''}
+                                onChange={(e) => handleSettingChange(plugin.id, setting.key, e.target.value)}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                              >
+                                {setting.options.map((opt) => (
+                                  <option key={opt} value={opt}>{opt}</option>
+                                ))}
+                              </select>
+                            ) : setting.type === 'Boolean' ? (
                               <label className="flex items-center gap-2 cursor-pointer">
                                 <input
                                   type="checkbox"
@@ -315,6 +266,18 @@ export default function Plugins() {
                           <Save size={16} />
                           {saveStatus[plugin.id] === 'saving' ? 'Saving...' : 'Save Settings'}
                         </button>
+
+                        {isTestable && (
+                          <button
+                            onClick={() => handleTestConnection(plugin.id)}
+                            disabled={test?.testing}
+                            className="flex items-center gap-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 disabled:opacity-50 transition-colors"
+                          >
+                            <Plug size={16} />
+                            {test?.testing ? 'Testing...' : 'Test Connection'}
+                          </button>
+                        )}
+
                         {saveStatus[plugin.id] === 'saved' && (
                           <span className="text-green-600 text-sm">Settings saved successfully!</span>
                         )}
@@ -322,6 +285,17 @@ export default function Plugins() {
                           <span className="text-red-600 text-sm">Failed to save settings</span>
                         )}
                       </div>
+
+                      {/* Test connection result */}
+                      {test?.result && (
+                        <div className={`mt-3 p-3 rounded-lg text-sm ${
+                          test.result.success
+                            ? 'bg-green-50 text-green-800 border border-green-200'
+                            : 'bg-red-50 text-red-800 border border-red-200'
+                        }`}>
+                          {test.result.message}
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

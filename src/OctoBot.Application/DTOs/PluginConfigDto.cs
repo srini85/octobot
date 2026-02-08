@@ -21,8 +21,10 @@ public record PluginInfoDto(
     string Description,
     string Version,
     string? Author,
+    string? ReadMe,
     IReadOnlyList<string>? Dependencies,
-    IReadOnlyList<PluginSettingDefinitionDto>? Settings = null
+    IReadOnlyList<PluginSettingDefinitionDto>? Settings = null,
+    bool IsTestable = false
 );
 
 public record PluginSettingDefinitionDto(
@@ -31,5 +33,6 @@ public record PluginSettingDefinitionDto(
     string Description,
     string Type,
     bool IsRequired,
-    string? DefaultValue
+    string? DefaultValue,
+    IReadOnlyList<string>? Options = null
 );
