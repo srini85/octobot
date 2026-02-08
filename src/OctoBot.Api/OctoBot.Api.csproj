@@ -24,6 +24,7 @@
     <ProjectReference Include="..\OctoBot.Channels.Telegram\OctoBot.Channels.Telegram.csproj" />
     <ProjectReference Include="..\OctoBot.Plugins.Abstractions\OctoBot.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\OctoBot.Plugins.Core\OctoBot.Plugins.Core.csproj" />
+    <ProjectReference Include="..\OctoBot.Plugins.Office365\OctoBot.Plugins.Office365.csproj" />
   </ItemGroup>
 
 </Project>

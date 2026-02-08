@@ -11,6 +11,7 @@ using OctoBot.LLM.Ollama;
 using OctoBot.LLM.OpenAI;
 using OctoBot.Plugins.Abstractions;
 using OctoBot.Plugins.Core;
+using OctoBot.Plugins.Office365;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -51,6 +52,7 @@ builder.Services.AddSingleton<IChannelManager, ChannelManager>();
 
 // Plugins
 builder.Services.AddCorePlugins();
+builder.Services.AddOffice365Plugins();
 builder.Services.AddSingleton<IPluginRegistry, PluginRegistry>();
 
 // Scheduled Jobs

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using OctoBot.Application.DTOs;
 using OctoBot.Core.Entities;
@@ -28,7 +29,10 @@ public class PluginsController : ControllerBase
             p.Metadata.Description,
             p.Metadata.Version,
             p.Metadata.Author,
-            p.Metadata.Dependencies
+            p.Metadata.Dependencies,
+            p.Metadata.Settings?.Select(s => new PluginSettingDefinitionDto(
+                s.Key, s.DisplayName, s.Description, s.Type.ToString(), s.IsRequired, s.DefaultValue
+            )).ToList()
         )).ToList();
 
         return Ok(plugins);
@@ -46,12 +50,18 @@ public class PluginsController : ControllerBase
         var result = allPlugins.Select(p =>
         {
             var config = botConfigs.FirstOrDefault(c => c.PluginId == p.Metadata.Id);
+            Dictionary<string, string>? settings = null;
+            if (!string.IsNullOrEmpty(config?.Settings))
+            {
+                settings = JsonSerializer.Deserialize<Dictionary<string, string>>(config.Settings);
+            }
             return new BotPluginStatusDto(
                 p.Metadata.Id,
                 p.Metadata.Name,
                 p.Metadata.Description,
                 p.Metadata.Version,
-                config?.IsEnabled ?? false
+                config?.IsEnabled ?? false,
+                settings
             );
         }).ToList();
 
@@ -78,6 +88,10 @@ public class PluginsController : ControllerBase
         if (existing != null)
         {
             existing.IsEnabled = dto.IsEnabled;
+            if (dto.Settings != null)
+            {
+                existing.Settings = JsonSerializer.Serialize(dto.Settings);
+            }
             existing.UpdatedAt = DateTime.UtcNow;
             await _unitOfWork.PluginConfigs.UpdateAsync(existing, ct);
         }
@@ -89,6 +103,7 @@ public class PluginsController : ControllerBase
                 BotInstanceId = botId,
                 PluginId = dto.PluginId,
                 IsEnabled = dto.IsEnabled,
+                Settings = dto.Settings != null ? JsonSerializer.Serialize(dto.Settings) : null,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -105,10 +120,12 @@ public record BotPluginStatusDto(
     string Name,
     string Description,
     string Version,
-    bool IsEnabled
+    bool IsEnabled,
+    Dictionary<string, string>? Settings = null
 );
 
 public record TogglePluginDto(
     string PluginId,
-    bool IsEnabled
+    bool IsEnabled,
+    Dictionary<string, string>? Settings = null
 );

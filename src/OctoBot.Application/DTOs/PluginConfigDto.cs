@@ -21,5 +21,15 @@ public record PluginInfoDto(
     string Description,
     string Version,
     string? Author,
-    IReadOnlyList<string>? Dependencies
+    IReadOnlyList<string>? Dependencies,
+    IReadOnlyList<PluginSettingDefinitionDto>? Settings = null
+);
+
+public record PluginSettingDefinitionDto(
+    string Key,
+    string DisplayName,
+    string Description,
+    string Type,
+    bool IsRequired,
+    string? DefaultValue
 );

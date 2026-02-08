@@ -56,13 +56,23 @@ public class OctoBotAgent : IOctoBotAgent
 
         var chatClient = await provider.CreateChatClientAsync(llmConfig, ct);
 
-        // Collect plugin functions
+        // Collect plugin functions and configure plugins with their stored settings
         var tools = new List<AITool>();
         foreach (var pluginConfig in _botInstance.PluginConfigs.Where(p => p.IsEnabled))
         {
             var plugin = _pluginRegistry.GetPlugin(pluginConfig.PluginId);
             if (plugin != null)
             {
+                // Configure plugin with stored settings if it supports configuration
+                if (plugin is IConfigurablePlugin configurable && !string.IsNullOrEmpty(pluginConfig.Settings))
+                {
+                    var settings = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(pluginConfig.Settings);
+                    if (settings != null)
+                    {
+                        configurable.Configure(settings);
+                    }
+                }
+
                 // AIFunction is a subclass of AITool, cast directly
                 tools.AddRange(plugin.GetFunctions().Cast<AITool>());
             }
