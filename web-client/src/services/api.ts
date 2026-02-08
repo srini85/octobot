@@ -85,6 +85,12 @@ export const pluginsApi = {
       method: 'POST',
       body: JSON.stringify(settings ?? {}),
     }),
+  getOAuthAuthUrl: (botId: string, pluginId: string) =>
+    fetchApi<{ authUrl: string; redirectUri: string }>(`/plugins/oauth/auth-url?botId=${botId}&pluginId=${pluginId}`),
+  getOAuthStatus: (botId: string, pluginId: string) =>
+    fetchApi<{ connected: boolean; email?: string; connectedAt?: string }>(`/plugins/oauth/status/${botId}/${pluginId}`),
+  disconnectOAuth: (botId: string, pluginId: string) =>
+    fetchApi<{ success: boolean }>(`/plugins/oauth/disconnect/${botId}/${pluginId}`, { method: 'POST' }),
 }
 
 // Conversations

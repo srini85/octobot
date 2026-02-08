@@ -1,13 +1,14 @@
-using System.ComponentModel;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Search;
-using MailKit.Security;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Identity.Client;
+using Microsoft.Graph;
+using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions.Authentication;
 using OctoBot.Core.Interfaces;
 using OctoBot.Plugins.Abstractions;
 using Telegram.Bot;
@@ -21,24 +22,27 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
     private Guid _botInstanceId;
     private IServiceScopeFactory? _scopeFactory;
 
-    // Auth mode: "Password" or "OAuth2"
-    private string _authMethod = "Password";
+    // Auth mode: "IMAP" or "Microsoft Graph"
+    private string _authMethod = "IMAP";
 
     // Shared settings
-    private string? _email;
-    private string _imapServer = "outlook.office365.com";
-    private int _imapPort = 993;
-    private bool _useSsl = true;
     private int _maxEmailsPerCheck = 10;
     private DateTime _lastCheckTime = DateTime.UtcNow;
 
-    // Password mode
+    // IMAP mode
+    private string? _email;
     private string? _password;
+    private string _imapServer = "outlook.office365.com";
+    private int _imapPort = 993;
+    private bool _useSsl = true;
 
-    // OAuth2 mode (client credentials)
+    // Microsoft Graph mode (delegated OAuth)
     private string? _clientId;
-    private string? _tenantId;
+    private string _tenantId = "common";
     private string? _clientSecret;
+    private string? _accessToken;
+    private string? _refreshToken;
+    private DateTime _tokenExpiry = DateTime.MinValue;
 
     public Office365EmailPlugin()
     {
@@ -47,20 +51,20 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
 
     public PluginMetadata Metadata => new(
         Id: "office365-email",
-        Name: "Email Monitor (IMAP)",
-        Description: "Monitors an email inbox via IMAP and sends new email summaries to Telegram. Supports password auth (Gmail, Yahoo, personal Outlook) and OAuth2 (Office 365 business).",
+        Name: "Email Monitor",
+        Description: "Monitors an email inbox and sends new email summaries to Telegram. Supports IMAP (Gmail, Yahoo, personal Outlook) and Microsoft Graph with OAuth sign-in (Office 365 / Microsoft 365).",
         Version: "2.0.0",
         Author: "OctoBot",
         ReadMe: """
             ## Setup Instructions
 
-            This plugin connects to your email via IMAP. Choose the authentication method that matches your email provider.
+            Choose the authentication method that matches your email provider.
 
             ---
 
-            ### Mode 1: Password / App Password (Gmail, Yahoo, personal Outlook.com)
+            ### Mode 1: IMAP (Gmail, Yahoo, personal Outlook.com)
 
-            Set **Auth Method** to **Password**.
+            Set **Auth Method** to **IMAP**. This uses traditional IMAP with a password or App Password.
 
             **Gmail:**
             1. Enable [2-Step Verification](https://myaccount.google.com/security) on your Google account.
@@ -80,37 +84,35 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
 
             ---
 
-            ### Mode 2: OAuth2 (Office 365 / Microsoft 365 Business)
+            ### Mode 2: Microsoft Graph (Office 365 / Microsoft 365)
 
-            Set **Auth Method** to **OAuth2**. Basic auth / app passwords are disabled for business accounts — OAuth2 is required.
+            Set **Auth Method** to **Microsoft Graph**. You'll sign in with your Microsoft account to grant access — no passwords stored.
 
             **Step 1: Register an app in Azure Entra ID**
             1. Go to [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration**.
-            2. Name it (e.g. "OctoBot Email Monitor"), set **Supported account types** to "Accounts in this organizational directory only".
-            3. No redirect URI needed. Click **Register**.
-            4. Copy the **Application (client) ID** and **Directory (tenant) ID** into the settings below.
+            2. Name it (e.g. "OctoBot Email Monitor").
+            3. Set **Supported account types** to match your needs (single tenant or multi-tenant).
+            4. Set **Redirect URI** to **Web** with the value: `http://localhost:5000/api/plugins/oauth/callback` (adjust host/port to match your deployment).
+            5. Click **Register**.
+            6. Copy the **Application (client) ID** into the **Client ID** setting below.
 
             **Step 2: Create a client secret**
             1. Go to **Certificates & secrets** → **New client secret**.
-            2. Copy the secret **Value** (not the ID) into the **Client Secret** setting.
+            2. Copy the secret **Value** (not the Secret ID) into the **Client Secret** setting below.
 
             **Step 3: Add API permissions**
-            1. Go to **API permissions** → **Add a permission** → **APIs my organization uses**.
-            2. Search for **Office 365 Exchange Online** and select it.
-            3. Choose **Application permissions** → check **IMAP.AccessAsApp**.
-            4. Click **Grant admin consent for [your org]**.
+            1. Go to **API permissions** → **Add a permission** → **Microsoft Graph**.
+            2. Choose **Delegated permissions**.
+            3. Add: `Mail.Read`, `User.Read`, `offline_access`.
+            4. Click **Grant admin consent** if required by your organization.
 
-            **Step 4: Register the service principal in Exchange Online**
-            Run the following in Exchange Online PowerShell:
-            ```
-            New-ServicePrincipal -AppId <CLIENT_ID> -ObjectId <ENTERPRISE_APP_OBJECT_ID>
-            Add-MailboxPermission -Identity "user@yourdomain.com" -User <ENTERPRISE_APP_OBJECT_ID> -AccessRights FullAccess
-            ```
-            ⚠️ Use the **Object ID** from **Enterprise Applications** (not App registrations).
+            **Step 4: Save settings and connect**
+            1. Save your Client ID and Client Secret settings below.
+            2. Click the **Connect to Office 365** button to sign in and authorize access.
 
             ---
 
-            After configuring, click **Test Connection** to verify.
+            After connecting, click **Test Connection** to verify.
             Then create a **Scheduled Job** (e.g. every 5 minutes: `*/5 * * * *`) with instructions like "Check for new emails and notify me".
             """,
         Settings: new[]
@@ -118,51 +120,30 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
             new PluginSettingDefinition(
                 Key: "AuthMethod",
                 DisplayName: "Auth Method",
-                Description: "Password for Gmail/Yahoo/personal Outlook; OAuth2 for Office 365 business accounts",
+                Description: "IMAP for Gmail/Yahoo/personal Outlook; Microsoft Graph for Office 365 / Microsoft 365 (sign in with your Microsoft account)",
                 Type: PluginSettingType.Select,
                 IsRequired: true,
-                DefaultValue: "Password",
-                Options: new[] { "Password", "OAuth2" }
+                DefaultValue: "IMAP",
+                Options: new[] { "IMAP", "Microsoft Graph" }
             ),
             new PluginSettingDefinition(
                 Key: "Email",
                 DisplayName: "Email Address",
-                Description: "Your email address (e.g. user@outlook.com, user@company.com)",
+                Description: "For IMAP mode: your email address",
                 Type: PluginSettingType.String,
-                IsRequired: true
+                IsRequired: false
             ),
             new PluginSettingDefinition(
                 Key: "Password",
                 DisplayName: "Password / App Password",
-                Description: "For Password mode: your email password or App Password",
-                Type: PluginSettingType.Secret,
-                IsRequired: false
-            ),
-            new PluginSettingDefinition(
-                Key: "ClientId",
-                DisplayName: "Client ID (OAuth2)",
-                Description: "For OAuth2 mode: Azure AD Application (client) ID",
-                Type: PluginSettingType.String,
-                IsRequired: false
-            ),
-            new PluginSettingDefinition(
-                Key: "TenantId",
-                DisplayName: "Tenant ID (OAuth2)",
-                Description: "For OAuth2 mode: Azure AD Directory (tenant) ID",
-                Type: PluginSettingType.String,
-                IsRequired: false
-            ),
-            new PluginSettingDefinition(
-                Key: "ClientSecret",
-                DisplayName: "Client Secret (OAuth2)",
-                Description: "For OAuth2 mode: Azure AD client secret value",
+                Description: "For IMAP mode: your email password or App Password",
                 Type: PluginSettingType.Secret,
                 IsRequired: false
             ),
             new PluginSettingDefinition(
                 Key: "ImapServer",
                 DisplayName: "IMAP Server",
-                Description: "IMAP server hostname (e.g. outlook.office365.com, imap.gmail.com)",
+                Description: "For IMAP mode: server hostname (e.g. outlook.office365.com, imap.gmail.com)",
                 Type: PluginSettingType.String,
                 IsRequired: false,
                 DefaultValue: "outlook.office365.com"
@@ -170,7 +151,7 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
             new PluginSettingDefinition(
                 Key: "ImapPort",
                 DisplayName: "IMAP Port",
-                Description: "IMAP server port (usually 993 for SSL)",
+                Description: "For IMAP mode: server port (usually 993 for SSL)",
                 Type: PluginSettingType.Number,
                 IsRequired: false,
                 DefaultValue: "993"
@@ -178,10 +159,32 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
             new PluginSettingDefinition(
                 Key: "UseSsl",
                 DisplayName: "Use SSL",
-                Description: "Connect using SSL/TLS (recommended)",
+                Description: "For IMAP mode: connect using SSL/TLS (recommended)",
                 Type: PluginSettingType.Boolean,
                 IsRequired: false,
                 DefaultValue: "true"
+            ),
+            new PluginSettingDefinition(
+                Key: "ClientId",
+                DisplayName: "Client ID",
+                Description: "For Microsoft Graph mode: Azure AD Application (client) ID",
+                Type: PluginSettingType.String,
+                IsRequired: false
+            ),
+            new PluginSettingDefinition(
+                Key: "TenantId",
+                DisplayName: "Tenant ID",
+                Description: "For Microsoft Graph mode: Azure AD Directory (tenant) ID, or 'common' for multi-tenant",
+                Type: PluginSettingType.String,
+                IsRequired: false,
+                DefaultValue: "common"
+            ),
+            new PluginSettingDefinition(
+                Key: "ClientSecret",
+                DisplayName: "Client Secret",
+                Description: "For Microsoft Graph mode: Azure AD client secret value",
+                Type: PluginSettingType.Secret,
+                IsRequired: false
             ),
             new PluginSettingDefinition(
                 Key: "MaxEmailsPerCheck",
@@ -216,87 +219,118 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
 
         if (settings.TryGetValue("AuthMethod", out var authMethod) && !string.IsNullOrEmpty(authMethod))
             _authMethod = authMethod;
+
+        // IMAP mode
         if (settings.TryGetValue("Email", out var email))
             _email = email;
-
-        // Password mode
         if (settings.TryGetValue("Password", out var password))
             _password = password;
-
-        // OAuth2 mode
-        if (settings.TryGetValue("ClientId", out var clientId))
-            _clientId = clientId;
-        if (settings.TryGetValue("TenantId", out var tenantId))
-            _tenantId = tenantId;
-        if (settings.TryGetValue("ClientSecret", out var clientSecret))
-            _clientSecret = clientSecret;
-
-        // Shared
         if (settings.TryGetValue("ImapServer", out var server) && !string.IsNullOrEmpty(server))
             _imapServer = server;
         if (settings.TryGetValue("ImapPort", out var port) && int.TryParse(port, out var p))
             _imapPort = p;
         if (settings.TryGetValue("UseSsl", out var ssl))
             _useSsl = ssl.Equals("true", StringComparison.OrdinalIgnoreCase);
+
+        // Microsoft Graph mode
+        if (settings.TryGetValue("ClientId", out var clientId))
+            _clientId = clientId;
+        if (settings.TryGetValue("TenantId", out var tenantId) && !string.IsNullOrEmpty(tenantId))
+            _tenantId = tenantId;
+        if (settings.TryGetValue("ClientSecret", out var clientSecret))
+            _clientSecret = clientSecret;
+
+        // OAuth tokens (stored by auth controller)
+        if (settings.TryGetValue("AccessToken", out var at))
+            _accessToken = at;
+        if (settings.TryGetValue("RefreshToken", out var rt))
+            _refreshToken = rt;
+        if (settings.TryGetValue("TokenExpiry", out var expiry) && DateTime.TryParse(expiry, out var exp))
+            _tokenExpiry = exp;
+
+        // Shared
         if (settings.TryGetValue("MaxEmailsPerCheck", out var maxEmails) && int.TryParse(maxEmails, out var max))
             _maxEmailsPerCheck = max;
         if (settings.TryGetValue("LastCheckTime", out var lct) && DateTime.TryParse(lct, out var lastCheck))
             _lastCheckTime = lastCheck;
     }
 
-    private bool IsOAuth2 => _authMethod.Equals("OAuth2", StringComparison.OrdinalIgnoreCase);
+    private bool IsGraphMode => _authMethod.Equals("Microsoft Graph", StringComparison.OrdinalIgnoreCase);
 
     private string? ValidateConfig()
     {
-        if (string.IsNullOrEmpty(_email))
-            return "Email address is required.";
-
-        if (IsOAuth2)
+        if (IsGraphMode)
         {
-            if (string.IsNullOrEmpty(_clientId))
-                return "Client ID is required for OAuth2 mode.";
-            if (string.IsNullOrEmpty(_tenantId))
-                return "Tenant ID is required for OAuth2 mode.";
-            if (string.IsNullOrEmpty(_clientSecret))
-                return "Client Secret is required for OAuth2 mode.";
+            if (string.IsNullOrEmpty(_accessToken))
+                return "Not connected to Office 365. Please click 'Connect to Office 365' to sign in.";
         }
         else
         {
+            if (string.IsNullOrEmpty(_email))
+                return "Email address is required for IMAP mode.";
             if (string.IsNullOrEmpty(_password))
-                return "Password is required for Password mode.";
+                return "Password is required for IMAP mode.";
         }
 
         return null;
     }
 
-    private async Task<string> AcquireOAuth2TokenAsync()
+    private async Task<string?> EnsureValidAccessTokenAsync()
     {
-        var app = ConfidentialClientApplicationBuilder.Create(_clientId)
-            .WithAuthority($"https://login.microsoftonline.com/{_tenantId}/v2.0")
-            .WithClientSecret(_clientSecret)
-            .Build();
+        if (string.IsNullOrEmpty(_accessToken))
+            return null;
 
-        var result = await app.AcquireTokenForClient(
-            new[] { "https://outlook.office365.com/.default" }
-        ).ExecuteAsync();
+        // If token is still valid, use it
+        if (_tokenExpiry > DateTime.UtcNow.AddMinutes(5))
+            return _accessToken;
 
-        return result.AccessToken;
+        // Try to refresh
+        if (string.IsNullOrEmpty(_refreshToken) || string.IsNullOrEmpty(_clientId))
+            return null;
+
+        using var httpClient = new HttpClient();
+        var tokenRequest = new Dictionary<string, string>
+        {
+            ["client_id"] = _clientId,
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = _refreshToken,
+            ["scope"] = "offline_access Mail.Read User.Read"
+        };
+        if (!string.IsNullOrEmpty(_clientSecret))
+            tokenRequest["client_secret"] = _clientSecret;
+
+        var response = await httpClient.PostAsync(
+            $"https://login.microsoftonline.com/{_tenantId}/oauth2/v2.0/token",
+            new FormUrlEncodedContent(tokenRequest));
+
+        if (!response.IsSuccessStatusCode) return null;
+
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        _accessToken = json.GetProperty("access_token").GetString();
+        _refreshToken = json.GetProperty("refresh_token").GetString();
+        var expiresIn = json.GetProperty("expires_in").GetInt32();
+        _tokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn);
+
+        // Persist the refreshed tokens
+        await UpdatePluginSettingsAsync(new Dictionary<string, string>
+        {
+            ["AccessToken"] = _accessToken!,
+            ["RefreshToken"] = _refreshToken!,
+            ["TokenExpiry"] = _tokenExpiry.ToString("O")
+        });
+
+        return _accessToken;
     }
 
-    private async Task AuthenticateImapClientAsync(ImapClient client)
+    private async Task<GraphServiceClient?> GetGraphClientAsync()
     {
-        await client.ConnectAsync(_imapServer, _imapPort, _useSsl);
+        var accessToken = await EnsureValidAccessTokenAsync();
+        if (string.IsNullOrEmpty(accessToken)) return null;
 
-        if (IsOAuth2)
-        {
-            var accessToken = await AcquireOAuth2TokenAsync();
-            var oauth2 = new SaslMechanismOAuth2(_email, accessToken);
-            await client.AuthenticateAsync(oauth2);
-        }
-        else
-        {
-            await client.AuthenticateAsync(_email, _password);
-        }
+        var authProvider = new BaseBearerTokenAuthenticationProvider(
+            new TokenProvider(accessToken));
+
+        return new GraphServiceClient(authProvider);
     }
 
     public async Task<(bool Success, string Message)> TestConnectionAsync()
@@ -307,17 +341,37 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
 
         try
         {
-            using var client = new ImapClient();
-            await AuthenticateImapClientAsync(client);
+            if (IsGraphMode)
+            {
+                var graphClient = await GetGraphClientAsync();
+                if (graphClient == null)
+                    return (false, "Not connected to Office 365. Please click 'Connect to Office 365' to sign in.");
 
-            var inbox = client.Inbox;
-            await inbox.OpenAsync(FolderAccess.ReadOnly);
-            var count = inbox.Count;
+                var inbox = await graphClient.Me.MailFolders["Inbox"].GetAsync();
+                var count = inbox?.TotalItemCount ?? 0;
 
-            await client.DisconnectAsync(true);
+                return (true, $"Connected successfully via Microsoft Graph! Inbox has {count} message(s).");
+            }
+            else
+            {
+                using var client = new ImapClient();
+                await client.ConnectAsync(_imapServer, _imapPort, _useSsl);
+                await client.AuthenticateAsync(_email, _password);
 
-            var mode = IsOAuth2 ? "OAuth2" : "Password";
-            return (true, $"Connected successfully via {mode}! Inbox has {count} message(s).");
+                var inbox = client.Inbox;
+                await inbox.OpenAsync(FolderAccess.ReadOnly);
+                var count = inbox.Count;
+
+                await client.DisconnectAsync(true);
+
+                return (true, $"Connected successfully via IMAP! Inbox has {count} message(s).");
+            }
+        }
+        catch (ODataError odataError)
+        {
+            var code = odataError.Error?.Code ?? "Unknown";
+            var msg = odataError.Error?.Message ?? odataError.Message;
+            return (false, $"Graph API error ({code}): {msg}");
         }
         catch (Exception ex)
         {
@@ -365,7 +419,7 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
         return chatIds.Distinct().ToList();
     }
 
-    private async Task UpdatePluginSettingsAsync(Dictionary<string, string> updates)
+    internal async Task UpdatePluginSettingsAsync(Dictionary<string, string> updates)
     {
         if (_scopeFactory == null) return;
 
@@ -411,80 +465,165 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
 
         try
         {
-            using var client = new ImapClient();
-            await AuthenticateImapClientAsync(client);
-
-            var inbox = client.Inbox;
-            await inbox.OpenAsync(FolderAccess.ReadOnly);
-
-            var query = SearchQuery.NotSeen.And(SearchQuery.DeliveredAfter(_lastCheckTime));
-            var uids = await inbox.SearchAsync(query);
-
-            _lastCheckTime = DateTime.UtcNow;
-            await UpdatePluginSettingsAsync(new Dictionary<string, string>
-            {
-                ["LastCheckTime"] = _lastCheckTime.ToString("O")
-            });
-
-            if (uids.Count == 0)
-            {
-                await client.DisconnectAsync(true);
-                return "No new unread emails found.";
-            }
-
-            var telegramBot = new TelegramBotClient(botToken);
-            var emailCount = 0;
-
-            var uidsToProcess = uids.Count > _maxEmailsPerCheck
-                ? uids.Skip(uids.Count - _maxEmailsPerCheck).ToList()
-                : uids;
-
-            foreach (var uid in uidsToProcess)
-            {
-                var message = await inbox.GetMessageAsync(uid);
-
-                var senderName = message.From?.Mailboxes?.FirstOrDefault()?.Name ?? "Unknown";
-                var senderEmail = message.From?.Mailboxes?.FirstOrDefault()?.Address ?? "Unknown";
-                var subject = message.Subject ?? "(No Subject)";
-                var preview = message.TextBody ?? message.HtmlBody ?? "";
-
-                if (preview.Length > 200)
-                    preview = preview[..200] + "...";
-
-                var notification = new StringBuilder();
-                notification.AppendLine("\ud83d\udce7 <b>New Email</b>");
-                notification.AppendLine($"<b>From:</b> {EscapeHtml(senderName)} &lt;{EscapeHtml(senderEmail)}&gt;");
-                notification.AppendLine($"<b>Subject:</b> {EscapeHtml(subject)}");
-                notification.AppendLine($"<b>Received:</b> {message.Date.LocalDateTime:g}");
-                notification.AppendLine($"<b>Preview:</b> {EscapeHtml(preview)}");
-
-                foreach (var chatId in chatIds)
-                {
-                    try
-                    {
-                        await telegramBot.SendMessage(
-                            chatId: chatId,
-                            text: notification.ToString(),
-                            parseMode: ParseMode.Html
-                        );
-                    }
-                    catch
-                    {
-                        // Skip chats that fail (e.g., user blocked bot)
-                    }
-                }
-
-                emailCount++;
-            }
-
-            await client.DisconnectAsync(true);
-
-            return $"Found and notified about {emailCount} new email(s) via Telegram to {chatIds.Count} chat(s).";
+            if (IsGraphMode)
+                return await CheckNewEmailsViaGraphAsync(botToken, chatIds);
+            else
+                return await CheckNewEmailsViaImapAsync(botToken, chatIds);
+        }
+        catch (ODataError odataError)
+        {
+            var code = odataError.Error?.Code ?? "Unknown";
+            var msg = odataError.Error?.Message ?? odataError.Message;
+            return $"Graph API error ({code}): {msg}";
         }
         catch (Exception ex)
         {
             return $"Error checking emails: {ex.Message}";
         }
+    }
+
+    private async Task<string> CheckNewEmailsViaGraphAsync(string botToken, List<long> chatIds)
+    {
+        var graphClient = await GetGraphClientAsync();
+        if (graphClient == null)
+        {
+            return "Not connected to Office 365. Please reconnect from the plugin settings page.";
+        }
+
+        var filterTime = _lastCheckTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        var messages = await graphClient.Me.Messages.GetAsync(config =>
+        {
+            config.QueryParameters.Filter = $"isRead eq false and receivedDateTime ge {filterTime}";
+            config.QueryParameters.Top = _maxEmailsPerCheck;
+            config.QueryParameters.Select = new[] { "subject", "from", "receivedDateTime", "bodyPreview", "isRead" };
+            config.QueryParameters.Orderby = new[] { "receivedDateTime desc" };
+        });
+
+        _lastCheckTime = DateTime.UtcNow;
+        await UpdatePluginSettingsAsync(new Dictionary<string, string>
+        {
+            ["LastCheckTime"] = _lastCheckTime.ToString("O")
+        });
+
+        if (messages?.Value == null || messages.Value.Count == 0)
+        {
+            return "No new unread emails found.";
+        }
+
+        var telegramBot = new TelegramBotClient(botToken);
+        var emailCount = 0;
+
+        foreach (var email in messages.Value)
+        {
+            var senderName = email.From?.EmailAddress?.Name ?? "Unknown";
+            var senderEmail = email.From?.EmailAddress?.Address ?? "Unknown";
+            var subject = email.Subject ?? "(No Subject)";
+            var preview = email.BodyPreview ?? "";
+
+            if (preview.Length > 200)
+                preview = preview[..200] + "...";
+
+            var notification = new StringBuilder();
+            notification.AppendLine("\ud83d\udce7 <b>New Email</b>");
+            notification.AppendLine($"<b>From:</b> {EscapeHtml(senderName)} &lt;{EscapeHtml(senderEmail)}&gt;");
+            notification.AppendLine($"<b>Subject:</b> {EscapeHtml(subject)}");
+            notification.AppendLine($"<b>Received:</b> {email.ReceivedDateTime?.ToString("g") ?? "Unknown"}");
+            notification.AppendLine($"<b>Preview:</b> {EscapeHtml(preview)}");
+
+            foreach (var chatId in chatIds)
+            {
+                try
+                {
+                    await telegramBot.SendMessage(
+                        chatId: chatId,
+                        text: notification.ToString(),
+                        parseMode: ParseMode.Html
+                    );
+                }
+                catch
+                {
+                    // Skip chats that fail
+                }
+            }
+
+            emailCount++;
+        }
+
+        return $"Found and notified about {emailCount} new email(s) via Telegram to {chatIds.Count} chat(s).";
+    }
+
+    private async Task<string> CheckNewEmailsViaImapAsync(string botToken, List<long> chatIds)
+    {
+        using var client = new ImapClient();
+        await client.ConnectAsync(_imapServer, _imapPort, _useSsl);
+        await client.AuthenticateAsync(_email, _password);
+
+        var inbox = client.Inbox;
+        await inbox.OpenAsync(FolderAccess.ReadOnly);
+
+        var query = SearchQuery.NotSeen.And(SearchQuery.DeliveredAfter(_lastCheckTime));
+        var uids = await inbox.SearchAsync(query);
+
+        _lastCheckTime = DateTime.UtcNow;
+        await UpdatePluginSettingsAsync(new Dictionary<string, string>
+        {
+            ["LastCheckTime"] = _lastCheckTime.ToString("O")
+        });
+
+        if (uids.Count == 0)
+        {
+            await client.DisconnectAsync(true);
+            return "No new unread emails found.";
+        }
+
+        var telegramBot = new TelegramBotClient(botToken);
+        var emailCount = 0;
+
+        var uidsToProcess = uids.Count > _maxEmailsPerCheck
+            ? uids.Skip(uids.Count - _maxEmailsPerCheck).ToList()
+            : uids;
+
+        foreach (var uid in uidsToProcess)
+        {
+            var message = await inbox.GetMessageAsync(uid);
+
+            var senderName = message.From?.Mailboxes?.FirstOrDefault()?.Name ?? "Unknown";
+            var senderEmail = message.From?.Mailboxes?.FirstOrDefault()?.Address ?? "Unknown";
+            var subject = message.Subject ?? "(No Subject)";
+            var preview = message.TextBody ?? message.HtmlBody ?? "";
+
+            if (preview.Length > 200)
+                preview = preview[..200] + "...";
+
+            var notification = new StringBuilder();
+            notification.AppendLine("\ud83d\udce7 <b>New Email</b>");
+            notification.AppendLine($"<b>From:</b> {EscapeHtml(senderName)} &lt;{EscapeHtml(senderEmail)}&gt;");
+            notification.AppendLine($"<b>Subject:</b> {EscapeHtml(subject)}");
+            notification.AppendLine($"<b>Received:</b> {message.Date.LocalDateTime:g}");
+            notification.AppendLine($"<b>Preview:</b> {EscapeHtml(preview)}");
+
+            foreach (var chatId in chatIds)
+            {
+                try
+                {
+                    await telegramBot.SendMessage(
+                        chatId: chatId,
+                        text: notification.ToString(),
+                        parseMode: ParseMode.Html
+                    );
+                }
+                catch
+                {
+                    // Skip chats that fail
+                }
+            }
+
+            emailCount++;
+        }
+
+        await client.DisconnectAsync(true);
+
+        return $"Found and notified about {emailCount} new email(s) via Telegram to {chatIds.Count} chat(s).";
     }
 
     private static string EscapeHtml(string text)
@@ -493,21 +632,5 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin, ITestablePlugi
             .Replace("&", "&amp;")
             .Replace("<", "&lt;")
             .Replace(">", "&gt;");
-    }
-}
-
-public class Office365EmailFunctions
-{
-    private readonly Office365EmailPlugin _plugin;
-
-    public Office365EmailFunctions(Office365EmailPlugin plugin)
-    {
-        _plugin = plugin;
-    }
-
-    [Description("Check for new unread emails and send summaries to Telegram.")]
-    public async Task<string> CheckNewEmails()
-    {
-        return await _plugin.CheckNewEmailsAsync();
     }
 }

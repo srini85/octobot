@@ -16,5 +16,6 @@
     <Project Path="src/OctoBot.LLM.OpenAI/OctoBot.LLM.OpenAI.csproj" />
     <Project Path="src/OctoBot.Plugins.Abstractions/OctoBot.Plugins.Abstractions.csproj" />
     <Project Path="src/OctoBot.Plugins.Core/OctoBot.Plugins.Core.csproj" />
+    <Project Path="src/OctoBot.Plugins.Office365/OctoBot.Plugins.Office365.csproj" />
   </Folder>
 </Solution>

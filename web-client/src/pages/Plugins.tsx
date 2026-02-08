@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Puzzle, Settings, ChevronDown, ChevronUp, Save, BookOpen, Plug } from 'lucide-react'
+import { Puzzle, Settings, ChevronDown, ChevronUp, Save, BookOpen, Plug, Link2, Unlink, Mail } from 'lucide-react'
 import { pluginsApi } from '../services/api'
 import type { PluginInfo } from '../types'
 
@@ -26,6 +26,26 @@ export default function Plugins() {
     enabled: !!botId,
   })
 
+  // OAuth status for the email plugin
+  const { data: oauthStatus, refetch: refetchOAuthStatus } = useQuery({
+    queryKey: ['oauthStatus', botId, 'office365-email'],
+    queryFn: () => pluginsApi.getOAuthStatus(botId!, 'office365-email'),
+    enabled: !!botId,
+  })
+
+  // Listen for OAuth popup callback
+  const handleMessage = useCallback((event: MessageEvent) => {
+    if (event.data?.type === 'plugin-oauth-complete') {
+      refetchOAuthStatus()
+      queryClient.invalidateQueries({ queryKey: ['botPlugins', botId] })
+    }
+  }, [refetchOAuthStatus, queryClient, botId])
+
+  useEffect(() => {
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [handleMessage])
+
   // Pre-populate settings from saved configs
   useEffect(() => {
     if (botPlugins) {
@@ -43,6 +63,14 @@ export default function Plugins() {
     mutationFn: ({ pluginId, isEnabled, settings }: { pluginId: string; isEnabled: boolean; settings?: Record<string, string> }) =>
       pluginsApi.togglePlugin(botId!, pluginId, isEnabled, settings),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['botPlugins', botId] })
+    },
+  })
+
+  const disconnectMutation = useMutation({
+    mutationFn: (pluginId: string) => pluginsApi.disconnectOAuth(botId!, pluginId),
+    onSuccess: () => {
+      refetchOAuthStatus()
       queryClient.invalidateQueries({ queryKey: ['botPlugins', botId] })
     },
   })
@@ -106,6 +134,20 @@ export default function Plugins() {
     }
   }
 
+  const handleConnectOAuth = async (pluginId: string) => {
+    if (!botId) return
+    try {
+      const { authUrl } = await pluginsApi.getOAuthAuthUrl(botId, pluginId)
+      const width = 600
+      const height = 700
+      const left = window.screenX + (window.outerWidth - width) / 2
+      const top = window.screenY + (window.outerHeight - height) / 2
+      window.open(authUrl, 'plugin-oauth', `width=${width},height=${height},left=${left},top=${top}`)
+    } catch (err) {
+      console.error('Failed to get auth URL:', err)
+    }
+  }
+
   const getPluginDef = (pluginId: string): PluginInfo | undefined => {
     return pluginDefs?.find(p => p.id === pluginId)
   }
@@ -115,11 +157,26 @@ export default function Plugins() {
     return (def?.settings?.length ?? 0) > 0
   }
 
+  // Filter out internal OAuth settings and settings not relevant to the current auth mode
   const getDisplaySettings = (pluginId: string) => {
     const def = getPluginDef(pluginId)
-    return def?.settings?.filter(s =>
-      !['LastCheckTime'].includes(s.key)
-    )
+    const authMethod = pluginSettings[pluginId]?.['AuthMethod'] || 'IMAP'
+    const isGraph = authMethod === 'Microsoft Graph'
+
+    const hiddenKeys = ['AccessToken', 'RefreshToken', 'TokenExpiry', 'ConnectedEmail', 'ConnectedAt', 'LastCheckTime']
+    const imapOnlyKeys = ['Email', 'Password', 'ImapServer', 'ImapPort', 'UseSsl']
+    const graphOnlyKeys = ['ClientId', 'TenantId', 'ClientSecret']
+
+    return def?.settings?.filter(s => {
+      if (hiddenKeys.includes(s.key)) return false
+      if (isGraph && imapOnlyKeys.includes(s.key)) return false
+      if (!isGraph && graphOnlyKeys.includes(s.key)) return false
+      return true
+    })
+  }
+
+  const isGraphMode = (pluginId: string) => {
+    return pluginSettings[pluginId]?.['AuthMethod'] === 'Microsoft Graph'
   }
 
   if (isLoading) {
@@ -143,6 +200,7 @@ export default function Plugins() {
           const displaySettings = getDisplaySettings(plugin.id)
           const isTestable = pluginDef?.isTestable ?? false
           const test = testStatus[plugin.id]
+          const showOAuth = isGraphMode(plugin.id)
 
           return (
             <div key={plugin.id} className={`bg-white rounded-lg shadow border-2 ${plugin.isEnabled ? 'border-green-500' : 'border-transparent'}`}>
@@ -267,7 +325,7 @@ export default function Plugins() {
                           {saveStatus[plugin.id] === 'saving' ? 'Saving...' : 'Save Settings'}
                         </button>
 
-                        {isTestable && (
+                        {isTestable && !showOAuth && (
                           <button
                             onClick={() => handleTestConnection(plugin.id)}
                             disabled={test?.testing}
@@ -286,7 +344,7 @@ export default function Plugins() {
                         )}
                       </div>
 
-                      {/* Test connection result */}
+                      {/* Test connection result (for IMAP mode) */}
                       {test?.result && (
                         <div className={`mt-3 p-3 rounded-lg text-sm ${
                           test.result.success
@@ -294,6 +352,73 @@ export default function Plugins() {
                             : 'bg-red-50 text-red-800 border border-red-200'
                         }`}>
                           {test.result.message}
+                        </div>
+                      )}
+
+                      {/* OAuth connection section (for Graph mode) */}
+                      {showOAuth && (
+                        <div className="mt-6">
+                          <h4 className="text-sm font-semibold text-gray-700 mb-3">Office 365 Connection</h4>
+                          {oauthStatus?.connected ? (
+                            <div className="flex items-center justify-between bg-white rounded-lg border border-green-200 p-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                                  <Mail size={20} className="text-green-600" />
+                                </div>
+                                <div>
+                                  <p className="text-sm font-medium text-gray-900">Connected to Office 365</p>
+                                  <p className="text-xs text-gray-500">{oauthStatus.email}</p>
+                                  {oauthStatus.connectedAt && (
+                                    <p className="text-xs text-gray-400">
+                                      Connected {new Date(oauthStatus.connectedAt).toLocaleDateString()}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => handleTestConnection(plugin.id)}
+                                  disabled={test?.testing}
+                                  className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-800 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+                                >
+                                  <Plug size={14} />
+                                  {test?.testing ? 'Testing...' : 'Test'}
+                                </button>
+                                <button
+                                  onClick={() => disconnectMutation.mutate(plugin.id)}
+                                  disabled={disconnectMutation.isPending}
+                                  className="flex items-center gap-1.5 text-sm text-red-600 hover:text-red-800 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                                >
+                                  <Unlink size={14} />
+                                  {disconnectMutation.isPending ? 'Disconnecting...' : 'Disconnect'}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="bg-white rounded-lg border border-gray-200 p-4">
+                              <p className="text-sm text-gray-600 mb-3">
+                                Sign in with your Microsoft account to grant access to your mailbox. Save your Client ID and Client Secret above first.
+                              </p>
+                              <button
+                                onClick={() => handleConnectOAuth(plugin.id)}
+                                className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2.5 rounded-lg hover:bg-blue-700 transition-colors"
+                              >
+                                <Link2 size={16} />
+                                Connect to Office 365
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Test result in Graph mode */}
+                          {test?.result && (
+                            <div className={`mt-3 p-3 rounded-lg text-sm ${
+                              test.result.success
+                                ? 'bg-green-50 text-green-800 border border-green-200'
+                                : 'bg-red-50 text-red-800 border border-red-200'
+                            }`}>
+                              {test.result.message}
+                            </div>
+                          )}
                         </div>
                       )}
                     </>
