@@ -56,6 +56,15 @@ export interface ChannelSettingDefinition {
   defaultValue?: string
 }
 
+export interface PluginSettingDefinition {
+  key: string
+  displayName: string
+  description: string
+  type: 'String' | 'Secret' | 'Number' | 'Boolean' | 'Select'
+  isRequired: boolean
+  defaultValue?: string
+}
+
 export interface PluginInfo {
   id: string
   name: string
@@ -63,6 +72,16 @@ export interface PluginInfo {
   version: string
   author?: string
   dependencies?: string[]
+  settings?: PluginSettingDefinition[]
+}
+
+export interface BotPluginStatus {
+  id: string
+  name: string
+  description: string
+  version: string
+  isEnabled: boolean
+  settings?: Record<string, string>
 }
 
 export interface Conversation {

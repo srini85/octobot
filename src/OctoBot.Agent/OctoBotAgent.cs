@@ -64,13 +64,12 @@ public class OctoBotAgent : IOctoBotAgent
             if (plugin != null)
             {
                 // Configure plugin with stored settings if it supports configuration
-                if (plugin is IConfigurablePlugin configurable && !string.IsNullOrEmpty(pluginConfig.Settings))
+                if (plugin is IConfigurablePlugin configurable)
                 {
-                    var settings = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(pluginConfig.Settings);
-                    if (settings != null)
-                    {
-                        configurable.Configure(settings);
-                    }
+                    var settings = !string.IsNullOrEmpty(pluginConfig.Settings)
+                        ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(pluginConfig.Settings) ?? new()
+                        : new Dictionary<string, string>();
+                    configurable.Configure(_botInstance.Id, settings, _scopeFactory);
                 }
 
                 // AIFunction is a subclass of AITool, cast directly

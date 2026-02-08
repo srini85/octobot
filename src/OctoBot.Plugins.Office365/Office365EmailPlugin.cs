@@ -1,11 +1,12 @@
 using System.ComponentModel;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Graph;
-using Microsoft.Graph.Models;
-using Microsoft.Identity.Client;
 using Microsoft.Kiota.Abstractions.Authentication;
+using OctoBot.Core.Interfaces;
 using OctoBot.Plugins.Abstractions;
 using Telegram.Bot;
 using Telegram.Bot.Types.Enums;
@@ -15,58 +16,29 @@ namespace OctoBot.Plugins.Office365;
 public class Office365EmailPlugin : IPlugin, IConfigurablePlugin
 {
     private readonly Office365EmailFunctions _functions;
-    private IPublicClientApplication? _msalApp;
-    private string? _tenantId;
-    private string? _clientId;
-    private string? _telegramBotToken;
-    private string? _telegramChatId;
+    private Guid _botInstanceId;
+    private IServiceScopeFactory? _scopeFactory;
     private int _maxEmailsPerCheck = 10;
     private DateTime _lastCheckTime = DateTime.UtcNow;
-    private readonly string _tokenCacheDir;
+
+    // OAuth tokens stored in plugin config by the auth controller
+    private string? _accessToken;
+    private string? _refreshToken;
+    private DateTime _tokenExpiry = DateTime.MinValue;
 
     public Office365EmailPlugin()
     {
         _functions = new Office365EmailFunctions(this);
-        _tokenCacheDir = Path.Combine(AppContext.BaseDirectory, "data", "tokens");
     }
 
     public PluginMetadata Metadata => new(
         Id: "office365-email",
         Name: "Office 365 Email",
-        Description: "Monitors Office 365 email and sends new email summaries to Telegram",
+        Description: "Monitors Office 365 email and sends new email summaries to Telegram. Connect your Office 365 account using the button below, then create a scheduled job to check periodically.",
         Version: "1.0.0",
         Author: "OctoBot",
         Settings: new[]
         {
-            new PluginSettingDefinition(
-                Key: "TenantId",
-                DisplayName: "Tenant ID",
-                Description: "Azure AD tenant ID (or 'common' for multi-tenant)",
-                Type: PluginSettingType.String,
-                IsRequired: true,
-                DefaultValue: "common"
-            ),
-            new PluginSettingDefinition(
-                Key: "ClientId",
-                DisplayName: "Client ID",
-                Description: "Azure AD app registration client ID",
-                Type: PluginSettingType.String,
-                IsRequired: true
-            ),
-            new PluginSettingDefinition(
-                Key: "TelegramBotToken",
-                DisplayName: "Telegram Bot Token",
-                Description: "Bot token for sending email notifications to Telegram",
-                Type: PluginSettingType.Secret,
-                IsRequired: true
-            ),
-            new PluginSettingDefinition(
-                Key: "TelegramChatId",
-                DisplayName: "Telegram Chat ID",
-                Description: "Target Telegram chat ID to receive email notifications",
-                Type: PluginSettingType.String,
-                IsRequired: true
-            ),
             new PluginSettingDefinition(
                 Key: "MaxEmailsPerCheck",
                 DisplayName: "Max Emails Per Check",
@@ -80,13 +52,11 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin
 
     public IEnumerable<AIFunction> GetFunctions()
     {
-        yield return AIFunctionFactory.Create(_functions.Authenticate, name: "Office365Email_Authenticate");
         yield return AIFunctionFactory.Create(_functions.CheckNewEmails, name: "Office365Email_CheckNewEmails");
     }
 
     public Task InitializeAsync(IServiceProvider services, CancellationToken ct = default)
     {
-        Directory.CreateDirectory(_tokenCacheDir);
         return Task.CompletedTask;
     }
 
@@ -95,189 +65,181 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin
         return Task.CompletedTask;
     }
 
-    public void Configure(Dictionary<string, string> settings)
+    public void Configure(Guid botInstanceId, Dictionary<string, string> settings, IServiceScopeFactory scopeFactory)
     {
-        if (settings.TryGetValue("TenantId", out var tenantId))
-            _tenantId = tenantId;
-        if (settings.TryGetValue("ClientId", out var clientId))
-            _clientId = clientId;
-        if (settings.TryGetValue("TelegramBotToken", out var token))
-            _telegramBotToken = token;
-        if (settings.TryGetValue("TelegramChatId", out var chatId))
-            _telegramChatId = chatId;
+        _botInstanceId = botInstanceId;
+        _scopeFactory = scopeFactory;
+
         if (settings.TryGetValue("MaxEmailsPerCheck", out var maxEmails) && int.TryParse(maxEmails, out var max))
             _maxEmailsPerCheck = max;
 
-        if (!string.IsNullOrEmpty(_tenantId) && !string.IsNullOrEmpty(_clientId))
-        {
-            _msalApp = PublicClientApplicationBuilder
-                .Create(_clientId)
-                .WithAuthority($"https://login.microsoftonline.com/{_tenantId}")
-                .WithDefaultRedirectUri()
-                .Build();
-
-            EnableTokenCache(_msalApp.UserTokenCache);
-        }
+        // Load OAuth tokens stored by the auth controller
+        if (settings.TryGetValue("AccessToken", out var at))
+            _accessToken = at;
+        if (settings.TryGetValue("RefreshToken", out var rt))
+            _refreshToken = rt;
+        if (settings.TryGetValue("TokenExpiry", out var expiry) && DateTime.TryParse(expiry, out var exp))
+            _tokenExpiry = exp;
+        if (settings.TryGetValue("LastCheckTime", out var lct) && DateTime.TryParse(lct, out var lastCheck))
+            _lastCheckTime = lastCheck;
     }
 
-    private void EnableTokenCache(ITokenCache tokenCache)
+    private async Task<string?> GetTelegramBotTokenAsync()
     {
-        var cacheFilePath = Path.Combine(_tokenCacheDir, $"{_clientId}.bin");
+        if (_scopeFactory == null) return null;
 
-        tokenCache.SetBeforeAccess(args =>
+        using var scope = _scopeFactory.CreateScope();
+        var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+
+        var channelConfigs = await unitOfWork.ChannelConfigs.FindAsync(
+            c => c.BotInstanceId == _botInstanceId && c.ChannelType == "telegram");
+
+        var config = channelConfigs.FirstOrDefault();
+        if (config == null || string.IsNullOrEmpty(config.Settings)) return null;
+
+        var settings = JsonSerializer.Deserialize<Dictionary<string, string>>(config.Settings);
+        string? botToken = null;
+        settings?.TryGetValue("BotToken", out botToken);
+        return botToken;
+    }
+
+    private async Task<List<long>> GetTelegramChatIdsAsync()
+    {
+        if (_scopeFactory == null) return new List<long>();
+
+        using var scope = _scopeFactory.CreateScope();
+        var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+
+        var conversations = await unitOfWork.Conversations.GetByBotIdAsync(_botInstanceId, take: 100);
+
+        var chatIds = new List<long>();
+        foreach (var conv in conversations)
         {
-            if (File.Exists(cacheFilePath))
+            // Telegram chat IDs are numeric; filter out non-Telegram channels like "job-xxx"
+            if (long.TryParse(conv.ChannelId, out var chatId))
             {
-                args.TokenCache.DeserializeMsalV3(File.ReadAllBytes(cacheFilePath));
+                chatIds.Add(chatId);
             }
+        }
+
+        return chatIds.Distinct().ToList();
+    }
+
+    private async Task<string?> EnsureValidAccessTokenAsync()
+    {
+        if (string.IsNullOrEmpty(_accessToken))
+            return null;
+
+        // If token is still valid, use it
+        if (_tokenExpiry > DateTime.UtcNow.AddMinutes(5))
+            return _accessToken;
+
+        // Try to refresh
+        if (string.IsNullOrEmpty(_refreshToken))
+            return null;
+
+        // Load Office365 config to get ClientId/ClientSecret for refresh
+        if (_scopeFactory == null) return null;
+
+        using var scope = _scopeFactory.CreateScope();
+        var config = scope.ServiceProvider.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>();
+        var clientId = config["Office365:ClientId"];
+        var clientSecret = config["Office365:ClientSecret"];
+        var tenantId = config["Office365:TenantId"] ?? "common";
+
+        if (string.IsNullOrEmpty(clientId)) return null;
+
+        using var httpClient = new HttpClient();
+        var tokenRequest = new Dictionary<string, string>
+        {
+            ["client_id"] = clientId,
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = _refreshToken,
+            ["scope"] = "offline_access Mail.Read User.Read"
+        };
+        if (!string.IsNullOrEmpty(clientSecret))
+            tokenRequest["client_secret"] = clientSecret;
+
+        var response = await httpClient.PostAsync(
+            $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token",
+            new FormUrlEncodedContent(tokenRequest));
+
+        if (!response.IsSuccessStatusCode) return null;
+
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        _accessToken = json.GetProperty("access_token").GetString();
+        _refreshToken = json.GetProperty("refresh_token").GetString();
+        var expiresIn = json.GetProperty("expires_in").GetInt32();
+        _tokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn);
+
+        // Persist the refreshed tokens
+        await UpdatePluginSettingsAsync(new Dictionary<string, string>
+        {
+            ["AccessToken"] = _accessToken!,
+            ["RefreshToken"] = _refreshToken!,
+            ["TokenExpiry"] = _tokenExpiry.ToString("O")
         });
 
-        tokenCache.SetAfterAccess(args =>
-        {
-            if (args.HasStateChanged)
-            {
-                File.WriteAllBytes(cacheFilePath, args.TokenCache.SerializeMsalV3());
-            }
-        });
+        return _accessToken;
     }
 
-    internal async Task<string> AuthenticateAsync()
+    private async Task UpdatePluginSettingsAsync(Dictionary<string, string> updates)
     {
-        if (_msalApp == null)
-        {
-            return "Plugin not configured. Please set TenantId and ClientId in plugin settings.";
-        }
+        if (_scopeFactory == null) return;
 
-        var scopes = new[] { "Mail.Read", "User.Read" };
+        using var scope = _scopeFactory.CreateScope();
+        var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
 
-        // Check if we already have a cached token
-        var accounts = await _msalApp.GetAccountsAsync();
-        if (accounts.Any())
-        {
-            try
-            {
-                await _msalApp.AcquireTokenSilent(scopes, accounts.FirstOrDefault()).ExecuteAsync();
-                return "Already authenticated. Token is valid.";
-            }
-            catch (MsalUiRequiredException)
-            {
-                // Need to re-authenticate
-            }
-        }
+        var pluginConfigs = await unitOfWork.PluginConfigs.FindAsync(
+            p => p.BotInstanceId == _botInstanceId && p.PluginId == "office365-email");
 
-        // Initiate device code flow
-        try
-        {
-            var result = await _msalApp.AcquireTokenWithDeviceCode(scopes, callback =>
-            {
-                // The callback message contains the URL and code for the user
-                return Task.CompletedTask;
-            }).ExecuteAsync();
+        var pluginConfig = pluginConfigs.FirstOrDefault();
+        if (pluginConfig == null) return;
 
-            return $"Authentication successful! Signed in as {result.Account.Username}.";
-        }
-        catch (MsalServiceException ex) when (ex.ErrorCode == "authorization_pending")
-        {
-            return "Authentication is pending. Please complete the sign-in in your browser.";
-        }
-        catch (OperationCanceledException)
-        {
-            return "Authentication was cancelled or timed out.";
-        }
-        catch (Exception ex)
-        {
-            return $"Authentication failed: {ex.Message}";
-        }
-    }
+        var settings = !string.IsNullOrEmpty(pluginConfig.Settings)
+            ? JsonSerializer.Deserialize<Dictionary<string, string>>(pluginConfig.Settings) ?? new()
+            : new Dictionary<string, string>();
 
-    internal async Task<string> StartDeviceCodeFlowAsync()
-    {
-        if (_msalApp == null)
-        {
-            return "Plugin not configured. Please set TenantId and ClientId in plugin settings.";
-        }
+        foreach (var kv in updates)
+            settings[kv.Key] = kv.Value;
 
-        var scopes = new[] { "Mail.Read", "User.Read" };
-
-        // Check if we already have a valid token
-        var accounts = await _msalApp.GetAccountsAsync();
-        if (accounts.Any())
-        {
-            try
-            {
-                await _msalApp.AcquireTokenSilent(scopes, accounts.FirstOrDefault()).ExecuteAsync();
-                return "Already authenticated with a valid token. No action needed.";
-            }
-            catch (MsalUiRequiredException)
-            {
-                // Need to re-authenticate
-            }
-        }
-
-        string deviceCodeMessage = "";
-
-        try
-        {
-            var result = await _msalApp.AcquireTokenWithDeviceCode(scopes, callback =>
-            {
-                deviceCodeMessage = callback.Message;
-                return Task.CompletedTask;
-            }).ExecuteAsync();
-
-            return $"Authentication successful! Signed in as {result.Account.Username}.";
-        }
-        catch (MsalServiceException ex) when (ex.ErrorCode == "authorization_pending")
-        {
-            return !string.IsNullOrEmpty(deviceCodeMessage)
-                ? deviceCodeMessage
-                : "Authentication is pending. Please check the device code flow.";
-        }
-        catch (Exception ex)
-        {
-            if (!string.IsNullOrEmpty(deviceCodeMessage))
-            {
-                return $"{deviceCodeMessage}\n\n(Note: Authentication is in progress. Complete the sign-in in your browser.)";
-            }
-            return $"Authentication failed: {ex.Message}";
-        }
+        pluginConfig.Settings = JsonSerializer.Serialize(settings);
+        pluginConfig.UpdatedAt = DateTime.UtcNow;
+        await unitOfWork.PluginConfigs.UpdateAsync(pluginConfig);
+        await unitOfWork.SaveChangesAsync();
     }
 
     private async Task<GraphServiceClient?> GetGraphClientAsync()
     {
-        if (_msalApp == null) return null;
+        var accessToken = await EnsureValidAccessTokenAsync();
+        if (string.IsNullOrEmpty(accessToken)) return null;
 
-        var scopes = new[] { "Mail.Read", "User.Read" };
-        var accounts = await _msalApp.GetAccountsAsync();
+        var authProvider = new BaseBearerTokenAuthenticationProvider(
+            new TokenProvider(accessToken));
 
-        if (!accounts.Any()) return null;
-
-        try
-        {
-            var authResult = await _msalApp.AcquireTokenSilent(scopes, accounts.FirstOrDefault())
-                .ExecuteAsync();
-
-            var authProvider = new BaseBearerTokenAuthenticationProvider(
-                new TokenProvider(authResult.AccessToken));
-
-            return new GraphServiceClient(authProvider);
-        }
-        catch (MsalUiRequiredException)
-        {
-            return null;
-        }
+        return new GraphServiceClient(authProvider);
     }
 
     internal async Task<string> CheckNewEmailsAsync()
     {
-        if (string.IsNullOrEmpty(_telegramBotToken) || string.IsNullOrEmpty(_telegramChatId))
-        {
-            return "Telegram settings not configured. Please set TelegramBotToken and TelegramChatId.";
-        }
-
         var graphClient = await GetGraphClientAsync();
         if (graphClient == null)
         {
-            return "Not authenticated. Please run Office365Email_Authenticate first.";
+            return "Not connected to Office 365. Please connect your account from the plugin settings page.";
+        }
+
+        // Get Telegram bot token from channel config
+        var botToken = await GetTelegramBotTokenAsync();
+        if (string.IsNullOrEmpty(botToken))
+        {
+            return "Telegram channel is not configured for this bot. Please set up the Telegram channel first.";
+        }
+
+        // Get chat IDs from existing conversations
+        var chatIds = await GetTelegramChatIdsAsync();
+        if (chatIds.Count == 0)
+        {
+            return "No Telegram conversations found. Please send a message to the bot on Telegram first so it knows where to send notifications.";
         }
 
         try
@@ -293,13 +255,18 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin
 
             _lastCheckTime = DateTime.UtcNow;
 
+            // Persist the last check time
+            await UpdatePluginSettingsAsync(new Dictionary<string, string>
+            {
+                ["LastCheckTime"] = _lastCheckTime.ToString("O")
+            });
+
             if (messages?.Value == null || messages.Value.Count == 0)
             {
                 return "No new unread emails found.";
             }
 
-            var telegramBot = new TelegramBotClient(_telegramBotToken);
-            var chatId = long.Parse(_telegramChatId);
+            var telegramBot = new TelegramBotClient(botToken);
             var emailCount = 0;
 
             foreach (var email in messages.Value)
@@ -309,7 +276,6 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin
                 var subject = email.Subject ?? "(No Subject)";
                 var preview = email.BodyPreview ?? "";
 
-                // Truncate preview to 200 chars
                 if (preview.Length > 200)
                     preview = preview[..200] + "...";
 
@@ -320,16 +286,27 @@ public class Office365EmailPlugin : IPlugin, IConfigurablePlugin
                 notification.AppendLine($"<b>Received:</b> {email.ReceivedDateTime?.ToString("g") ?? "Unknown"}");
                 notification.AppendLine($"<b>Preview:</b> {EscapeHtml(preview)}");
 
-                await telegramBot.SendMessage(
-                    chatId: chatId,
-                    text: notification.ToString(),
-                    parseMode: ParseMode.Html
-                );
+                // Send to all known Telegram chats
+                foreach (var chatId in chatIds)
+                {
+                    try
+                    {
+                        await telegramBot.SendMessage(
+                            chatId: chatId,
+                            text: notification.ToString(),
+                            parseMode: ParseMode.Html
+                        );
+                    }
+                    catch
+                    {
+                        // Skip chats that fail (e.g., user blocked bot)
+                    }
+                }
 
                 emailCount++;
             }
 
-            return $"Found and notified about {emailCount} new email(s) via Telegram.";
+            return $"Found and notified about {emailCount} new email(s) via Telegram to {chatIds.Count} chat(s).";
         }
         catch (Exception ex)
         {
@@ -355,22 +332,13 @@ public class Office365EmailFunctions
         _plugin = plugin;
     }
 
-    [Description("Authenticate with Office 365 using device code flow. Returns instructions for the user to complete sign-in.")]
-    public async Task<string> Authenticate()
-    {
-        return await _plugin.StartDeviceCodeFlowAsync();
-    }
-
-    [Description("Check for new unread emails in Office 365 and send summaries to the configured Telegram chat.")]
+    [Description("Check for new unread emails in Office 365 and send summaries to Telegram.")]
     public async Task<string> CheckNewEmails()
     {
         return await _plugin.CheckNewEmailsAsync();
     }
 }
 
-/// <summary>
-/// Simple token provider that wraps a pre-acquired access token for the Graph SDK.
-/// </summary>
 internal class TokenProvider : IAccessTokenProvider
 {
     private readonly string _accessToken;

@@ -1,4 +1,4 @@
-import type { BotInstance, CreateBotDto, UpdateBotDto, LLMProvider, LLMConfig, ChannelInfo, PluginInfo, Conversation, Message, ScheduledJob, CreateScheduledJobDto, UpdateScheduledJobDto, JobExecution } from '../types'
+import type { BotInstance, CreateBotDto, UpdateBotDto, LLMProvider, LLMConfig, ChannelInfo, PluginInfo, BotPluginStatus, Conversation, Message, ScheduledJob, CreateScheduledJobDto, UpdateScheduledJobDto, JobExecution } from '../types'
 
 const API_BASE = '/api'
 
@@ -74,12 +74,19 @@ export const channelsApi = {
 // Plugins
 export const pluginsApi = {
   getAll: () => fetchApi<PluginInfo[]>('/plugins'),
-  getBotPlugins: (botId: string) => fetchApi<{ id: string; name: string; description: string; version: string; isEnabled: boolean }[]>(`/plugins/bot/${botId}`),
-  togglePlugin: (botId: string, pluginId: string, isEnabled: boolean) =>
+  getBotPlugins: (botId: string) => fetchApi<BotPluginStatus[]>(`/plugins/bot/${botId}`),
+  togglePlugin: (botId: string, pluginId: string, isEnabled: boolean, settings?: Record<string, string>) =>
     fetchApi<{ success: boolean }>(`/plugins/bot/${botId}/toggle`, {
       method: 'POST',
-      body: JSON.stringify({ pluginId, isEnabled }),
+      body: JSON.stringify({ pluginId, isEnabled, settings }),
     }),
+}
+
+// Office 365 Auth
+export const office365Api = {
+  getAuthUrl: (botId: string) => fetchApi<{ authUrl: string; redirectUri: string }>(`/office365/auth-url?botId=${botId}`),
+  getStatus: (botId: string) => fetchApi<{ connected: boolean; email?: string; connectedAt?: string }>(`/office365/status/${botId}`),
+  disconnect: (botId: string) => fetchApi<{ success: boolean }>(`/office365/disconnect/${botId}`, { method: 'POST' }),
 }
 
 // Conversations
